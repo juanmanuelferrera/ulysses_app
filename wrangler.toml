@@ -1,0 +1,8 @@
+name = "ulysses-app"
+compatibility_date = "2024-12-01"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ulysses-db"
+database_id = "be4ddee5-430e-4bf8-a4e8-f732bd19e486"
