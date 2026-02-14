@@ -249,12 +249,21 @@ export function initSheetList() {
   });
 
   // Reset sort when selecting a group
-  bus.on('group:select', () => {
+  bus.on('group:select', async () => {
     if (currentSortBy === 'group' || currentSortBy === 'created') {
       currentSortBy = 'manual';
     }
     activeTagFilters.clear();
     if (tagFilterVisible) renderTagFilterBar();
+    const newBtn = document.getElementById('new-sheet-btn');
+    if (newBtn) newBtn.style.display = '';
+    await refreshList();
+    const groupId = getActiveGroupId();
+    if (currentSheets.length > 0) {
+      bus.emit('sheet:select', currentSheets[0].id);
+    } else {
+      bus.emit('sheet:none');
+    }
   });
 
   // Listen for filter changes
