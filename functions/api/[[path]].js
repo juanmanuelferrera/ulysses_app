@@ -38,22 +38,37 @@ export async function onRequest(context) {
     });
   }
 
-  // Auth check (skip for auth endpoint)
+  // Auth check
+  let userId = null;
+  let isAdmin = false;
   if (path !== 'auth') {
     const token = request.headers.get('Authorization')?.replace('Bearer ', '');
     if (!token) return json({ error: 'Unauthorized' }, 401);
 
-    // Accept valid session token (master password not accepted as bearer token)
-    {
-      const { results } = await DB.prepare('SELECT value FROM settings WHERE key = ?')
-        .bind(`session:${token}`).all();
-      const expires = results[0]?.value;
-      if (!expires || Date.now() > parseInt(expires)) {
-        // Clean up expired session
-        if (expires) await DB.prepare('DELETE FROM settings WHERE key = ?').bind(`session:${token}`).run();
-        return json({ error: 'Unauthorized' }, 401);
-      }
+    const { results } = await DB.prepare('SELECT value FROM settings WHERE key = ?')
+      .bind('session:' + token).all();
+    const val = results[0]?.value;
+    if (!val) return json({ error: 'Unauthorized' }, 401);
+
+    const parts = val.split('|');
+    if (parts.length < 2) {
+      await DB.prepare('DELETE FROM settings WHERE key = ?').bind('session:' + token).run();
+      return json({ error: 'Unauthorized' }, 401);
     }
+    const storedUserId = parts[0];
+    const expires = parseInt(parts[1]);
+    if (Date.now() > expires) {
+      await DB.prepare('DELETE FROM settings WHERE key = ?').bind('session:' + token).run();
+      return json({ error: 'Unauthorized' }, 401);
+    }
+    userId = storedUserId;
+
+    // Check if admin
+    const { results: uRow } = await DB.prepare('SELECT passwordHash FROM users WHERE id = ?').bind(userId).all();
+    if (uRow.length > 0 && uRow[0].passwordHash === env.AUTH_TOKEN) isAdmin = true;
+
+    // Admin endpoints require admin
+    if (path.startsWith('admin') && !isAdmin) return json({ error: 'Forbidden' }, 403);
   }
 
   try {
@@ -61,18 +76,53 @@ export async function onRequest(context) {
       ? await request.json().catch(() => ({}))
       : {};
 
+
+    // --- Admin: User management ---
+    if (path === 'admin/users' && method === 'GET') {
+      const { results } = await DB.prepare('SELECT id, name, createdAt FROM users ORDER BY createdAt').all();
+      return json(results);
+    }
+
+    if (path === 'admin/users' && method === 'POST') {
+      const { name, password } = body;
+      if (!name || !password) return json({ error: 'name and password required' }, 400);
+      const passwordHash = await hashPassword(password);
+      const { results: existing } = await DB.prepare('SELECT id FROM users WHERE passwordHash = ?').bind(passwordHash).all();
+      if (existing.length > 0) return json({ error: 'Password already in use' }, 400);
+      const user = { id: uid(), name, passwordHash, createdAt: Date.now() };
+      await DB.prepare('INSERT INTO users (id, name, passwordHash, createdAt) VALUES (?, ?, ?, ?)')
+        .bind(user.id, user.name, user.passwordHash, user.createdAt).run();
+      const group = { id: uid(), parentId: null, name: 'Inbox', sortOrder: 0, createdAt: Date.now(), userId: user.id };
+      await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt, userId) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt, group.userId).run();
+      return json({ id: user.id, name: user.name });
+    }
+
+    if (segments[0] === 'admin' && segments[1] === 'users' && segments[2] && method === 'DELETE') {
+      const delId = segments[2];
+      if (delId === userId) return json({ error: 'Cannot delete yourself' }, 400);
+      const { results: groups } = await DB.prepare('SELECT id FROM groups WHERE userId = ?').bind(delId).all();
+      for (const g of groups) { await deleteGroupRecursive(g.id, DB); }
+      const { results: tags } = await DB.prepare('SELECT id FROM tags WHERE userId = ?').bind(delId).all();
+      for (const t of tags) { await DB.prepare('DELETE FROM sheet_tags WHERE tagId = ?').bind(t.id).run(); }
+      await DB.prepare('DELETE FROM tags WHERE userId = ?').bind(delId).run();
+      await DB.prepare('DELETE FROM users WHERE id = ?').bind(delId).run();
+      return json({ ok: true });
+    }
+
     // --- Auth ---
-    // AUTH_TOKEN stores the SHA-256 hash of the password, never the plaintext.
-    // Client sends plaintext password → server hashes it → compares with stored hash.
     if (path === 'auth' && method === 'POST') {
       const inputHash = await hashPassword(body.token || '');
-      if (inputHash === env.AUTH_TOKEN) {
-        // Generate a session token valid for 6 months
+      const { results: users } = await DB.prepare(
+        'SELECT id, name FROM users WHERE passwordHash = ?'
+      ).bind(inputHash).all();
+      if (users.length > 0) {
+        const user = users[0];
         const session = crypto.randomUUID();
-        const expires = Date.now() + (180 * 24 * 60 * 60 * 1000); // 6 months
+        const expires = Date.now() + (180 * 24 * 60 * 60 * 1000);
         await DB.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
-          .bind(`session:${session}`, String(expires)).run();
-        return json({ ok: true, session, expires });
+          .bind('session:' + session, user.id + '|' + expires).run();
+        return json({ ok: true, session, expires, userId: user.id, userName: user.name, isAdmin: (inputHash === env.AUTH_TOKEN) });
       }
       return json({ ok: false }, 401);
     }
@@ -85,8 +135,8 @@ export async function onRequest(context) {
                 COALESCE(cnt, 0) as sheetCount
          FROM groups g
          LEFT JOIN (SELECT groupId, COUNT(*) as cnt FROM sheets WHERE isTrashed = 0 GROUP BY groupId) s
-         ON g.id = s.groupId ORDER BY g.sortOrder`
-      ).all();
+         ON g.id = s.groupId WHERE g.userId = ? ORDER BY g.sortOrder`
+      ).bind(userId).all();
       // Log for debugging subgroup issue
       const withParent = results.filter(g => g.parentId);
       if (withParent.length > 0) console.log('Groups with parentId:', JSON.stringify(withParent.map(g => ({ id: g.id, name: g.name, parentId: g.parentId }))));
@@ -121,13 +171,15 @@ export async function onRequest(context) {
         vals.push(v);
       }
       if (sets.length > 0) {
-        vals.push(id);
-        await DB.prepare(`UPDATE groups SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+        vals.push(id); vals.push(userId);
+        await DB.prepare(`UPDATE groups SET ${sets.join(', ')} WHERE id = ? AND userId = ?`).bind(...vals).run();
       }
       return json({ ok: true });
     }
 
     if (segments[0] === 'groups' && segments[1] && method === 'DELETE') {
+      const { results: gC } = await DB.prepare('SELECT id FROM groups WHERE id = ? AND userId = ?').bind(segments[1], userId).all();
+      if (!gC.length) return json({ error: 'Not found' }, 404);
       await deleteGroupRecursive(segments[1], DB);
       return json({ ok: true });
     }
@@ -137,11 +189,11 @@ export async function onRequest(context) {
       const now = Date.now();
       const sevenDays = 7 * 24 * 60 * 60 * 1000;
       const { results } = await DB.prepare(`SELECT
-        (SELECT COUNT(*) FROM sheets WHERE isTrashed = 0) as all_count,
-        (SELECT COUNT(*) FROM sheets WHERE isTrashed = 0 AND createdAt > ?) as recent,
-        (SELECT COUNT(*) FROM sheets WHERE isTrashed = 0 AND favorite = 1) as favorites,
-        (SELECT COUNT(*) FROM sheets WHERE isTrashed = 1) as trash
-      `).bind(now - sevenDays).all();
+        (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=0 AND g.userId=?) as all_count,
+        (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=0 AND s.createdAt>? AND g.userId=?) as recent,
+        (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=0 AND s.favorite=1 AND g.userId=?) as favorites,
+        (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=1 AND g.userId=?) as trash
+      `).bind(userId, now - sevenDays, userId, userId, userId).all();
       const r = results[0];
       return json({ all: r.all_count, recent: r.recent, favorites: r.favorites, trash: r.trash });
     }
@@ -155,11 +207,13 @@ export async function onRequest(context) {
 
       let results;
       if (filter) {
-        results = await getFilteredSheets(filter, DB);
+        results = await getFilteredSheets(filter, DB, userId);
       } else if (groupId) {
         let orderBy = 'sortOrder ASC';
         if (sort === 'date') orderBy = 'updatedAt DESC';
         if (sort === 'title') orderBy = 'title ASC';
+        const { results: gO } = await DB.prepare('SELECT id FROM groups WHERE id = ? AND userId = ?').bind(groupId, userId).all();
+        if (!gO.length) return json([]);
         const r = await DB.prepare(`SELECT * FROM sheets WHERE groupId = ? AND isTrashed = 0 ORDER BY ${orderBy}`)
           .bind(groupId).all();
         results = r.results;
@@ -193,8 +247,8 @@ export async function onRequest(context) {
       const q = url.searchParams.get('q') || '';
       const like = `%${q}%`;
       const { results } = await DB.prepare(
-        'SELECT * FROM sheets WHERE isTrashed = 0 AND (title LIKE ? OR content LIKE ? OR notes LIKE ?) ORDER BY updatedAt DESC LIMIT 50'
-      ).bind(like, like, like).all();
+        'SELECT s.* FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=0 AND g.userId=? AND (s.title LIKE ? OR s.content LIKE ? OR s.notes LIKE ?) ORDER BY s.updatedAt DESC LIMIT 50'
+      ).bind(userId, like, like, like).all();
       return json(results);
     }
 
@@ -312,7 +366,9 @@ export async function onRequest(context) {
 
     // Empty trash
     if (segments[0] === 'sheets' && segments[1] === 'empty-trash' && method === 'POST') {
-      const { results: trashed } = await DB.prepare('SELECT id FROM sheets WHERE isTrashed = 1').all();
+      const { results: trashed } = await DB.prepare(
+        'SELECT s.id FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=1 AND g.userId=?'
+      ).bind(userId).all();
       for (const s of trashed) {
         await DB.prepare('DELETE FROM sheet_tags WHERE sheetId = ?').bind(s.id).run();
         await DB.prepare('DELETE FROM goals WHERE sheetId = ?').bind(s.id).run();
@@ -323,14 +379,14 @@ export async function onRequest(context) {
 
     // --- Tags ---
     if (path === 'tags' && method === 'GET') {
-      const { results } = await DB.prepare('SELECT * FROM tags ORDER BY name').all();
+      const { results } = await DB.prepare('SELECT * FROM tags WHERE userId = ? ORDER BY name').bind(userId).all();
       return json(results);
     }
 
     if (path === 'tags' && method === 'POST') {
       const { name, color } = body;
-      const tag = { id: uid(), name, color: color || '#888' };
-      await DB.prepare('INSERT INTO tags (id, name, color) VALUES (?, ?, ?)').bind(tag.id, tag.name, tag.color).run();
+      const tag = { id: uid(), name, color: color || '#888', userId };
+      await DB.prepare('INSERT INTO tags (id, name, color, userId) VALUES (?, ?, ?, ?)').bind(tag.id, tag.name, tag.color, tag.userId).run();
       return json(tag);
     }
 
@@ -342,13 +398,15 @@ export async function onRequest(context) {
         sets.push(`${k} = ?`);
         vals.push(v);
       }
-      vals.push(id);
-      await DB.prepare(`UPDATE tags SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+      vals.push(id); vals.push(userId);
+      await DB.prepare(`UPDATE tags SET ${sets.join(', ')} WHERE id = ? AND userId = ?`).bind(...vals).run();
       return json({ ok: true });
     }
 
     if (segments[0] === 'tags' && segments[1] && method === 'DELETE') {
       const id = segments[1];
+      const { results: tC } = await DB.prepare('SELECT id FROM tags WHERE id = ? AND userId = ?').bind(id, userId).all();
+      if (!tC.length) return json({ error: 'Not found' }, 404);
       await DB.prepare('DELETE FROM sheet_tags WHERE tagId = ?').bind(id).run();
       await DB.prepare('DELETE FROM tags WHERE id = ?').bind(id).run();
       return json({ ok: true });
@@ -418,11 +476,15 @@ export async function onRequest(context) {
 
     // --- Backup ---
     if (path === 'backup' && method === 'GET') {
-      const groups = (await DB.prepare('SELECT * FROM groups ORDER BY sortOrder').all()).results;
-      const sheets = (await DB.prepare('SELECT * FROM sheets').all()).results;
-      const tags = (await DB.prepare('SELECT * FROM tags').all()).results;
-      const sheetTags = (await DB.prepare('SELECT * FROM sheet_tags').all()).results;
-      const goals = (await DB.prepare('SELECT * FROM goals').all()).results;
+      const groups = (await DB.prepare('SELECT * FROM groups WHERE userId = ? ORDER BY sortOrder').bind(userId).all()).results;
+      const gIds = groups.map(g => g.id);
+      const gPH = gIds.length ? gIds.map(() => '?').join(',') : "'_'";
+      const sheets = gIds.length ? (await DB.prepare('SELECT * FROM sheets WHERE groupId IN (' + gPH + ')').bind(...gIds).all()).results : [];
+      const tags = (await DB.prepare('SELECT * FROM tags WHERE userId = ?').bind(userId).all()).results;
+      const sIds = sheets.map(s => s.id);
+      const sPH = sIds.length ? sIds.map(() => '?').join(',') : "'_'";
+      const sheetTags = sIds.length ? (await DB.prepare('SELECT * FROM sheet_tags WHERE sheetId IN (' + sPH + ')').bind(...sIds).all()).results : [];
+      const goals = sIds.length ? (await DB.prepare('SELECT * FROM goals WHERE sheetId IN (' + sPH + ')').bind(...sIds).all()).results : [];
       const settings = (await DB.prepare('SELECT * FROM settings').all()).results;
       return json({ version: 2, exportedAt: new Date().toISOString(), groups, sheets, tags, sheetTags, goals, settings });
     }
@@ -515,11 +577,12 @@ async function deleteGroupRecursive(id, DB) {
 }
 
 // Filtered sheets helper
-async function getFilteredSheets(filter, DB) {
+async function getFilteredSheets(filter, DB, userId) {
   const now = Date.now();
   const sevenDays = 7 * 24 * 60 * 60 * 1000;
   let results;
   const joinSelect = 'SELECT sheets.*, groups.name AS groupName FROM sheets LEFT JOIN groups ON sheets.groupId = groups.id';
+  const uf = userId ? ' AND groups.userId = ?' : '';
 
   if (filter.startsWith('tag:')) {
     const tagId = filter.slice(4);
@@ -531,16 +594,16 @@ async function getFilteredSheets(filter, DB) {
 
   switch (filter) {
     case 'all':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 ORDER BY sheets.updatedAt DESC`).all()).results;
+      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...(userId?[userId]:[])).all()).results;
       break;
     case 'recent':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 AND sheets.createdAt > ? ORDER BY sheets.updatedAt DESC`).bind(now - sevenDays).all()).results;
+      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 AND sheets.createdAt > ?' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...[now-sevenDays,userId].filter(Boolean)).all()).results;
       break;
     case 'favorites':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 AND sheets.favorite = 1 ORDER BY sheets.updatedAt DESC`).all()).results;
+      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 AND sheets.favorite = 1' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...(userId?[userId]:[])).all()).results;
       break;
     case 'trash':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 1 ORDER BY sheets.updatedAt DESC`).all()).results;
+      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 1' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...(userId?[userId]:[])).all()).results;
       break;
     default:
       results = [];

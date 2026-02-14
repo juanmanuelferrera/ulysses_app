@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ulysses Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{width:100%;max-width:480px;padding:20px}
+h1{font-size:20px;font-weight:600;margin-bottom:24px;text-align:center;color:#fff}
+.card{background:#16213e;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid rgba(255,255,255,0.06)}
+.card h2{font-size:14px;font-weight:600;margin-bottom:16px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px}
+.user-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)}
+.user-row:last-child{border-bottom:none}
+.user-name{font-weight:500}
+.user-date{font-size:12px;color:#666}
+.btn-delete{background:none;border:none;color:#ff4444;cursor:pointer;font-size:13px;padding:4px 8px;border-radius:4px}
+.btn-delete:hover{background:rgba(255,68,68,0.1)}
+input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);background:#0f1629;color:#fff;font-size:14px;margin-bottom:10px;outline:none}
+input:focus{border-color:#007aff}
+input::placeholder{color:#555}
+.btn{width:100%;padding:10px;border-radius:8px;border:none;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.15s}
+.btn-primary{background:#007aff;color:#fff}
+.btn-primary:hover{background:#0066dd}
+.btn-primary:disabled{opacity:0.5;cursor:not-allowed}
+.btn-back{background:rgba(255,255,255,0.06);color:#aaa;margin-bottom:16px}
+.btn-back:hover{background:rgba(255,255,255,0.1);color:#fff}
+.msg{text-align:center;padding:8px;border-radius:8px;margin-bottom:12px;font-size:13px;display:none}
+.msg.error{background:rgba(255,68,68,0.15);color:#ff6666;display:block}
+.msg.success{background:rgba(0,200,100,0.15);color:#66cc88;display:block}
+.empty{text-align:center;padding:20px;color:#555;font-size:14px}
+</style>
+</head>
+<body>
+<div class="container" id="app"></div>
+<script>
+var app = document.getElementById("app");
+var token = null;
+
+function esc(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+function showLogin() {
+  app.innerHTML = '<div style="text-align:center">' +
+    '<h1>Admin Panel</h1>' +
+    '<p style="color:#666;font-size:13px;margin-bottom:20px">Enter admin password</p>' +
+    '<div id="msg" class="msg"></div>' +
+    '<input type="password" id="pw" placeholder="Admin password">' +
+    '<button class="btn btn-primary" id="login-btn">Sign In</button></div>';
+  var pw = document.getElementById("pw");
+  var btn = document.getElementById("login-btn");
+  var msg = document.getElementById("msg");
+  function doLogin() {
+    msg.className = "msg"; msg.style.display = "none";
+    btn.disabled = true; btn.textContent = "Signing in...";
+    fetch("/api/auth", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ token: pw.value })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.ok && data.isAdmin) { token = data.session; showPanel(); }
+      else if (data.ok) { msg.className = "msg error"; msg.textContent = "Not an admin account"; }
+      else { msg.className = "msg error"; msg.textContent = "Invalid password"; }
+      btn.disabled = false; btn.textContent = "Sign In";
+    }).catch(function() {
+      msg.className = "msg error"; msg.textContent = "Connection error";
+      btn.disabled = false; btn.textContent = "Sign In";
+    });
+  }
+  btn.onclick = doLogin;
+  pw.onkeydown = function(e) { if (e.key === "Enter") doLogin(); };
+  pw.focus();
+}
+
+function apiCall(path, opts) {
+  opts = opts || {};
+  return fetch("/api/" + path, {
+    method: opts.method || "GET",
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  }).then(function(r) { return r.json(); });
+}
+
+function showPanel() {
+  apiCall("admin/users").then(function(users) {
+    var rows = "";
+    if (users.length === 0) {
+      rows = '<div class="empty">No users yet</div>';
+    } else {
+      for (var i = 0; i < users.length; i++) {
+        var u = users[i];
+        rows += '<div class="user-row"><div><span class="user-name">' + esc(u.name) + '</span>' +
+          '<div class="user-date">Created: ' + new Date(u.createdAt).toLocaleDateString() + '</div></div>' +
+          '<button class="btn-delete" data-id="' + u.id + '" data-name="' + esc(u.name) + '">Delete</button></div>';
+      }
+    }
+
+    app.innerHTML = '<button class="btn btn-back" id="back-btn">Back to App</button>' +
+      '<h1>User Management</h1>' +
+      '<div class="card"><h2>Users (' + users.length + ')</h2><div id="user-list">' + rows + '</div></div>' +
+      '<div class="card"><h2>Add New User</h2><div id="add-msg" class="msg"></div>' +
+      '<input type="text" id="new-name" placeholder="Name">' +
+      '<input type="text" id="new-pw" placeholder="Password">' +
+      '<button class="btn btn-primary" id="add-btn">Create User</button></div>';
+
+    document.getElementById("back-btn").onclick = function() { location.href = "/"; };
+
+    var delBtns = document.querySelectorAll(".btn-delete");
+    for (var j = 0; j < delBtns.length; j++) {
+      delBtns[j].onclick = function() {
+        var id = this.dataset.id;
+        var name = this.dataset.name;
+        if (!confirm('Delete user "' + name + '" and ALL their data?')) return;
+        apiCall("admin/users/" + id, { method: "DELETE" }).then(function(res) {
+          if (res.error) { alert(res.error); return; }
+          showPanel();
+        });
+      };
+    }
+
+    document.getElementById("add-btn").onclick = function() {
+      var name = document.getElementById("new-name").value.trim();
+      var password = document.getElementById("new-pw").value.trim();
+      var addMsg = document.getElementById("add-msg");
+      addMsg.className = "msg"; addMsg.style.display = "none";
+      if (!name || !password) { addMsg.className = "msg error"; addMsg.textContent = "Name and password required"; return; }
+      apiCall("admin/users", { method: "POST", body: { name: name, password: password } }).then(function(res) {
+        if (res.error) { addMsg.className = "msg error"; addMsg.textContent = res.error; return; }
+        addMsg.className = "msg success"; addMsg.textContent = 'User "' + name + '" created!';
+        document.getElementById("new-name").value = "";
+        document.getElementById("new-pw").value = "";
+        setTimeout(showPanel, 1000);
+      });
+    };
+  });
+}
+
+showLogin();
+</script>
+</body>
+</html>

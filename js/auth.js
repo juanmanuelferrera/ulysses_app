@@ -63,8 +63,10 @@ export function showLogin() {
       const data = await res.json();
 
       if (data.ok) {
-        // Store the session token (valid for 6 months), not the password
         setAuthToken(data.session);
+        if (data.userName) localStorage.setItem('ulysses_user', data.userName);
+        if (data.isAdmin) localStorage.setItem('ulysses_admin', '1');
+        else localStorage.removeItem('ulysses_admin');
         loginOverlay.remove();
         loginOverlay = null;
         bus.emit('auth:success');
@@ -103,5 +105,7 @@ export function showLogin() {
 
 export function logout() {
   clearAuth();
+  localStorage.removeItem('ulysses_user');
+  localStorage.removeItem('ulysses_admin');
   location.reload();
 }
