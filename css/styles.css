@@ -1757,8 +1757,8 @@ select.input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  margin-top: 12px;
+  padding: 6px 12px;
+  margin-top: 4px;
   border-top: 1px solid var(--border);
 }
 .logout-user {
@@ -1871,6 +1871,34 @@ select.input {
   #toggle-library,
   #toggle-sheets {
     display: none;
+  }
+
+  /* Compact logout on mobile */
+  .logout-bar {
+    padding: 4px 12px;
+    margin-top: 2px;
+  }
+  .logout-user, .logout-btn {
+    font-size: 10px;
+  }
+
+  /* Compact filters and groups */
+  .filter-item {
+    padding: 6px 12px;
+    min-height: 32px;
+  }
+  .group-item {
+    padding: 6px 12px;
+    min-height: 32px;
+  }
+  .section-header {
+    padding: 4px 12px;
+    margin-top: 4px;
+  }
+  .panel-header {
+    padding: 8px 12px;
+    height: auto;
+    min-height: 36px;
   }
 
   /* Make sheet list search full width */
