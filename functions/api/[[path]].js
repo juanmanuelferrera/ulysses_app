@@ -65,10 +65,8 @@ export async function onRequest(context) {
     // AUTH_TOKEN stores the SHA-256 hash of the password, never the plaintext.
     // Client sends plaintext password → server hashes it → compares with stored hash.
     if (path === 'auth' && method === 'POST') {
-      // Debug - hardcoded hash for REDACTED
-      const debugHash = 'REDACTED';
       const inputHash = await hashPassword(body.token || '');
-      if (inputHash === debugHash || inputHash === env.AUTH_TOKEN) {
+      if (inputHash === env.AUTH_TOKEN) {
         // Generate a session token valid for 6 months
         const session = crypto.randomUUID();
         const expires = Date.now() + (180 * 24 * 60 * 60 * 1000); // 6 months
