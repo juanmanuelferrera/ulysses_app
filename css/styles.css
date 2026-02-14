@@ -2110,3 +2110,17 @@ body {
     padding-bottom: 50px;
   }
 }
+
+/* Editor disabled state */
+.editor-container.editor-disabled .cm-editor {
+  cursor: default;
+}
+.editor-container.editor-disabled .cm-cursor {
+  display: none !important;
+}
+.editor-container.editor-disabled .cm-selectionBackground {
+  display: none !important;
+}
+.editor-container.editor-disabled .cm-activeLine {
+  background: none !important;
+}

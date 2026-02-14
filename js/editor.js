@@ -203,6 +203,7 @@ export function clearEditor() {
     effects: readOnlyComp.reconfigure(EditorState.readOnly.of(true)),
   });
   view.dom.style.opacity = '0.5';
+  view.dom.closest('.editor-container')?.classList.add('editor-disabled');
   updateStats('');
 }
 
@@ -212,6 +213,7 @@ export function enableEditor() {
     effects: readOnlyComp.reconfigure(EditorState.readOnly.of(false)),
   });
   view.dom.style.opacity = '1';
+  view.dom.closest('.editor-container')?.classList.remove('editor-disabled');
 }
 
 export function focus() {
