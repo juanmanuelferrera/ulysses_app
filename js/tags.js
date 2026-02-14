@@ -17,23 +17,24 @@ export function initTags() {
     showNewTagModal();
   });
 
-  // Global right-click handler for all tag elements (sidebar + sheet cards)
   document.addEventListener('contextmenu', (e) => {
     const tagItem = e.target.closest('.tag-item');
     const tagPill = e.target.closest('.tag-pill');
-    if (tagItem || tagPill) {
+    if (tagItem) {
       e.preventDefault();
       e.stopPropagation();
-      const tagName = tagItem
-        ? tagItem.querySelector('span').textContent
-        : tagPill.textContent;
-      const tagColor = tagItem
-        ? tagItem.style.background
-        : tagPill.style.background;
-      // Find the matching tag
+      const tagName = tagItem.querySelector('span').textContent;
       getTags().then(tags => {
         const tag = tags.find(t => t.name === tagName);
         if (tag) showTagContextMenu(e.clientX, e.clientY, tag);
+      });
+    } else if (tagPill) {
+      e.preventDefault();
+      e.stopPropagation();
+      const tagName = tagPill.textContent;
+      getTags().then(tags => {
+        const tag = tags.find(t => t.name === tagName);
+        if (tag && currentSheetId) showSheetTagContextMenu(e.clientX, e.clientY, tag, currentSheetId);
       });
     }
   });
@@ -103,11 +104,31 @@ function showTagContextMenu(x, y, tag) {
       closeMenu();
       await deleteTag(tag.id);
       renderTagsSidebar();
+      if (currentSheetId) bus.emit('sheet:tags-changed', currentSheetId);
       const undone = await showUndoToast(`Tag "${tag.name}" deleted`);
       if (undone) {
         await createTag(tag.name, tag.color);
         renderTagsSidebar();
       }
+    }}),
+  ]);
+
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  document.body.appendChild(menu);
+
+  const closeMenu = () => menu.remove();
+  setTimeout(() => document.addEventListener('click', closeMenu, { once: true }), 10);
+}
+
+function showSheetTagContextMenu(x, y, tag, sheetId) {
+  document.querySelector('.context-menu')?.remove();
+
+  const menu = el('div', { class: 'context-menu fade-in' }, [
+    el('div', { class: 'context-menu-item danger', text: 'Remove from sheet', onClick: async () => {
+      closeMenu();
+      await removeTagFromSheet(sheetId, tag.id);
+      bus.emit('sheet:tags-changed', sheetId);
     }}),
   ]);
 
