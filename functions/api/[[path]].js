@@ -148,7 +148,7 @@ export async function onRequest(context) {
     if (path === 'groups' && method === 'GET') {
       const { results } = await DB.prepare(
         `SELECT g.id, g.parentId as parentId, g.name, g.sortOrder, g.createdAt,
-                g.icon, g.iconColor, g.collapsed, g.section, g.section,
+                g.icon, g.iconColor, g.collapsed, g.section,
                 COALESCE(cnt, 0) as sheetCount
          FROM groups g
          LEFT JOIN (SELECT groupId, COUNT(*) as cnt FROM sheets WHERE isTrashed = 0 GROUP BY groupId) s
@@ -173,9 +173,9 @@ export async function onRequest(context) {
         sortOrder = results[0]?.cnt || 0;
       }
       const section = body.section || null;
-      const group = { id: uid(), parentId: pid, name, sortOrder, createdAt: Date.now(), section };
-      await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt, section) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt, group.section).run();
+      const group = { id: uid(), parentId: pid, name, sortOrder, createdAt: Date.now(), section, userId };
+      await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt, section, userId) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt, group.section, group.userId).run();
       return json(group);
     }
 

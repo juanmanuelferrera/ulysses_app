@@ -2,6 +2,7 @@
 import { bus, el, appConfirm } from './utils.js';
 import { createGroup, updateGroup, deleteGroup, getGroups, getSheets, reorderGroups, getFilteredSheets, getFilterCounts, emptyTrash } from './db.js';
 import { renderIcon, showIconPicker, ICON_COLORS } from './icons.js';
+import { logout } from './auth.js';
 
 let activeGroupId = null;
 let activeFilter = null;  // 'all', 'recent', 'favorites', 'trash'
@@ -189,6 +190,18 @@ export async function renderGroups(groups) {
     pendingRenameId = null;
     startRename(id);
   }
+
+  // Logout button at bottom
+  if (!treeEl.querySelector('.logout-btn')) {
+    const userName = localStorage.getItem('ulysses_user') || '';
+    const logoutBar = el('div', { class: 'logout-bar' }, [
+      el('span', { class: 'logout-user', text: userName }),
+      el('button', { class: 'logout-btn', text: 'Sign Out', onClick: () => {
+        logout();
+      }}),
+    ]);
+    treeEl.appendChild(logoutBar);
+  }
 }
 
 function getRecursiveSheetCount(group, allGroups) {
@@ -339,6 +352,19 @@ function showContextMenu(x, y, groupId, isChild = false) {
     startRename(groupId);
     closeMenu();
   }}));
+  // Move between sections (top-level groups only)
+  const thisGroup = allGroups.find(g => g.id === groupId);
+  if (thisGroup && !thisGroup.parentId) {
+    const curSec = thisGroup.section || 'notes';
+    const targetSec = curSec === 'projects' ? 'notes' : 'projects';
+    const label = targetSec === 'projects' ? 'Move to Projects' : 'Move to Notes';
+    items.push(el('div', { class: 'context-menu-item', text: label, onClick: async () => {
+      closeMenu();
+      await updateGroup(groupId, { section: targetSec });
+      bus.emit('group:updated');
+    }}));
+  }
+
   items.push(el('div', { class: 'context-menu-divider' }));
   items.push(el('div', { class: 'context-menu-item danger', text: 'Move to Trash', onClick: async () => {
     closeMenu();

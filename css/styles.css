@@ -1750,3 +1750,33 @@ select.input {
   margin-bottom: 12px;
   font-family: var(--font-sans);
 }
+
+
+/* Logout bar */
+.logout-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.logout-user {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+.logout-btn {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.logout-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
