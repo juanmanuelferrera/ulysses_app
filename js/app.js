@@ -231,12 +231,14 @@ function initMobile() {
 
   // Handle virtual keyboard on mobile
   if ('visualViewport' in window) {
-    window.visualViewport.addEventListener('resize', () => {
+    const onResize = () => {
       const vv = window.visualViewport;
-      document.documentElement.style.setProperty('--vh', vv.height + 'px');
-      const appEl = document.getElementById('app');
-      if (appEl) appEl.style.height = vv.height + 'px';
-    });
+      document.documentElement.style.height = vv.height + 'px';
+      document.getElementById('app').style.height = vv.height + 'px';
+      window.scrollTo(0, 0);
+    };
+    window.visualViewport.addEventListener('resize', onResize);
+    window.visualViewport.addEventListener('scroll', () => window.scrollTo(0, 0));
   }
 
   const isMobile = () => window.innerWidth <= 768;
