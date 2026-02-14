@@ -1913,3 +1913,10 @@ select.input {
     display: none;
   }
 }
+
+.logout-header-btn {
+  opacity: 0.5;
+}
+.logout-header-btn:hover {
+  opacity: 1;
+}

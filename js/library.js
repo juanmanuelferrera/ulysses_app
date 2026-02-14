@@ -37,6 +37,11 @@ export function initLibrary() {
     });
   });
 
+  // Logout button in header
+  document.getElementById('header-logout-btn')?.addEventListener('click', () => {
+    logout();
+  });
+
   // New group button
   document.getElementById('new-group-btn')?.addEventListener('click', async () => {
     const group = await createGroup('New Group', null, 'notes');
@@ -191,17 +196,7 @@ export async function renderGroups(groups) {
     startRename(id);
   }
 
-  // Logout button at bottom
-  if (!treeEl.querySelector('.logout-btn')) {
-    const userName = localStorage.getItem('ulysses_user') || '';
-    const logoutBar = el('div', { class: 'logout-bar' }, [
-      el('span', { class: 'logout-user', text: userName }),
-      el('button', { class: 'logout-btn', text: 'Sign Out', onClick: () => {
-        logout();
-      }}),
-    ]);
-    treeEl.appendChild(logoutBar);
-  }
+
 }
 
 function getRecursiveSheetCount(group, allGroups) {
