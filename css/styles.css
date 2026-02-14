@@ -2032,3 +2032,56 @@ body {
     -webkit-overflow-scrolling: touch;
   }
 }
+
+
+@media (max-width: 768px) {
+  /* Bigger top toolbar icons */
+  .editor-toolbar .btn-icon {
+    padding: 6px;
+    min-width: 36px;
+  }
+  .editor-toolbar .btn-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Markup bar: taller, bigger icons */
+  .markup-bar {
+    height: 44px;
+    position: sticky;
+    bottom: 0;
+    z-index: 100;
+  }
+  .markup-btn {
+    width: 38px;
+    height: 36px;
+  }
+  .markup-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+  .markup-btn-text {
+    font-size: 14px;
+    min-width: 34px;
+  }
+  .markup-bar-inner {
+    gap: 4px;
+    padding: 0 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Status bar: hide on mobile */
+  .status-bar {
+    display: none;
+  }
+
+  /* When virtual keyboard is open, keep markup bar visible */
+  #editor-panel {
+    height: 100%;
+  }
+  .editor-container {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}

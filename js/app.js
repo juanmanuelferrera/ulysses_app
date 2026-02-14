@@ -228,6 +228,17 @@ document.addEventListener('DOMContentLoaded', init);
 // === Mobile Navigation ===
 function initMobile() {
   const appEl = document.getElementById('app');
+
+  // Handle virtual keyboard on mobile
+  if ('visualViewport' in window) {
+    window.visualViewport.addEventListener('resize', () => {
+      const vv = window.visualViewport;
+      document.documentElement.style.setProperty('--vh', vv.height + 'px');
+      const appEl = document.getElementById('app');
+      if (appEl) appEl.style.height = vv.height + 'px';
+    });
+  }
+
   const isMobile = () => window.innerWidth <= 768;
 
   // Back to library
