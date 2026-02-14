@@ -81,7 +81,7 @@ export async function onRequest(context) {
     if (path === 'groups' && method === 'GET') {
       const { results } = await DB.prepare(
         `SELECT g.id, g.parentId as parentId, g.name, g.sortOrder, g.createdAt,
-                g.icon, g.iconColor, g.collapsed, g.section,
+                g.icon, g.iconColor, g.collapsed, g.section, g.section,
                 COALESCE(cnt, 0) as sheetCount
          FROM groups g
          LEFT JOIN (SELECT groupId, COUNT(*) as cnt FROM sheets WHERE isTrashed = 0 GROUP BY groupId) s
@@ -473,6 +473,9 @@ export async function onRequest(context) {
       } catch (e) { /* column already exists */ }
       try {
         await DB.prepare('ALTER TABLE groups ADD COLUMN collapsed INTEGER DEFAULT 0').run();
+      } catch (e) { /* column already exists */ }
+      try {
+        await DB.prepare("ALTER TABLE groups ADD COLUMN section TEXT DEFAULT NULL").run();
       } catch (e) { /* column already exists */ }
       try {
         await DB.prepare("ALTER TABLE groups ADD COLUMN section TEXT DEFAULT NULL").run();
