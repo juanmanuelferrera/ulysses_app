@@ -2058,8 +2058,6 @@ body {
     height: 42px;
     flex-shrink: 0;
     z-index: 100;
-    margin-bottom: 0;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .markup-btn {
     width: 38px;

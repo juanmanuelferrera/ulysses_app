@@ -230,20 +230,17 @@ function initMobile() {
   const appEl = document.getElementById('app');
 
   // Handle virtual keyboard on mobile
-  if ('visualViewport' in window) {
-    const onResize = () => {
+  if ('visualViewport' in window && isMobile()) {
+    const update = () => {
       const vv = window.visualViewport;
-      const h = vv.height + 'px';
-      document.documentElement.style.height = h;
-      document.getElementById('app').style.height = h;
-      document.body.style.height = h;
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-      window.scrollTo(0, vv.offsetTop);
+      const h = vv.height;
+      const offset = vv.offsetTop;
+      const appEl = document.getElementById('app');
+      appEl.style.height = h + 'px';
+      appEl.style.transform = 'translateY(' + offset + 'px)';
     };
-    window.visualViewport.addEventListener('resize', onResize);
-    window.visualViewport.addEventListener('scroll', onResize);
-    onResize();
+    window.visualViewport.addEventListener('resize', update);
+    window.visualViewport.addEventListener('scroll', update);
   }
 
   const isMobile = () => window.innerWidth <= 768;
