@@ -336,8 +336,7 @@ function showContextMenu(x, y, groupId, isChild = false) {
       console.log('[library] Created group:', JSON.stringify(group));
       pendingRenameId = group.id;
       bus.emit('group:created', group);
-    }}),
-  ];
+    }}));
 
   items.push(el('div', { class: 'context-menu-divider' }));
   items.push(el('div', { class: 'context-menu-item', text: 'Change Icon...', onClick: async () => {
