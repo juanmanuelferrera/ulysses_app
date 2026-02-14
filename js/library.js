@@ -189,6 +189,14 @@ export async function renderGroups(groups) {
     treeEl.appendChild(sectionContainer);
   }
 
+  // Mobile logout link
+  const existingLogout = document.querySelector('.mobile-logout');
+  if (existingLogout) existingLogout.remove();
+  const mobileLogout = el('div', { class: 'mobile-logout' }, [
+    el('button', { text: 'Sign Out', onClick: () => { logout(); }}),
+  ]);
+  treeEl.appendChild(mobileLogout);
+
   // Auto-start rename
   if (pendingRenameId) {
     const id = pendingRenameId;
