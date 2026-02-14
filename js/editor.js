@@ -1,6 +1,6 @@
 // editor.js — CodeMirror 6 setup with markdown and auto-save
 import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, rectangularSelection } from 'https://esm.sh/@codemirror/view@6';
-import { EditorState } from 'https://esm.sh/@codemirror/state@6';
+import { EditorState, Compartment } from 'https://esm.sh/@codemirror/state@6';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from 'https://esm.sh/@codemirror/commands@6';
 import { markdown, markdownLanguage } from 'https://esm.sh/@codemirror/lang-markdown@6';
 import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from 'https://esm.sh/@codemirror/language@6';
@@ -9,6 +9,7 @@ import { search, searchKeymap, openSearchPanel } from 'https://esm.sh/@codemirro
 import { bus, debounce } from './utils.js';
 
 let view = null;
+const readOnlyComp = new Compartment();
 let currentSheetId = null;
 let typewriterMode = false;
 let focusMode = false;
@@ -127,6 +128,7 @@ export function initEditor(container) {
         }
       }),
       EditorView.lineWrapping,
+      readOnlyComp.of(EditorState.readOnly.of(true)),
     ],
   });
 
@@ -198,16 +200,18 @@ export function clearEditor() {
   currentSheetId = null;
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: '' },
+    effects: readOnlyComp.reconfigure(EditorState.readOnly.of(true)),
   });
   view.dom.style.opacity = '0.5';
-  view.dom.style.pointerEvents = 'none';
   updateStats('');
 }
 
 export function enableEditor() {
   if (!view) return;
+  view.dispatch({
+    effects: readOnlyComp.reconfigure(EditorState.readOnly.of(false)),
+  });
   view.dom.style.opacity = '1';
-  view.dom.style.pointerEvents = 'auto';
 }
 
 export function focus() {
