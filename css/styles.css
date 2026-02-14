@@ -2092,3 +2092,24 @@ body {
     overflow-y: auto;
   }
 }
+
+@media (max-width: 768px) {
+  #editor-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+  .editor-toolbar {
+    flex-shrink: 0;
+  }
+  .editor-container {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding-bottom: 20px;
+  }
+  .markup-bar {
+    flex-shrink: 0;
+  }
+}
