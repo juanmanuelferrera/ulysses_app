@@ -233,12 +233,17 @@ function initMobile() {
   if ('visualViewport' in window) {
     const onResize = () => {
       const vv = window.visualViewport;
-      document.documentElement.style.height = vv.height + 'px';
-      document.getElementById('app').style.height = vv.height + 'px';
-      window.scrollTo(0, 0);
+      const h = vv.height + 'px';
+      document.documentElement.style.height = h;
+      document.getElementById('app').style.height = h;
+      document.body.style.height = h;
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+      window.scrollTo(0, vv.offsetTop);
     };
     window.visualViewport.addEventListener('resize', onResize);
-    window.visualViewport.addEventListener('scroll', () => window.scrollTo(0, 0));
+    window.visualViewport.addEventListener('scroll', onResize);
+    onResize();
   }
 
   const isMobile = () => window.innerWidth <= 768;

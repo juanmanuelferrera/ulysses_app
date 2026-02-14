@@ -2037,8 +2037,8 @@ body {
 @media (max-width: 768px) {
   /* Top toolbar icons */
   .editor-toolbar .btn-icon {
-    padding: 4px;
-    min-width: 30px;
+    padding: 6px;
+    min-width: 34px;
   }
   .editor-toolbar .btn-icon svg {
     width: 18px;
@@ -2046,13 +2046,20 @@ body {
   }
   .editor-toolbar {
     overflow: visible;
+    justify-content: space-between;
+  }
+  .editor-toolbar-left,
+  .editor-toolbar-right {
+    gap: 6px;
   }
 
-  /* Markup bar: taller, bigger icons */
+  /* Markup bar: flush with keyboard */
   .markup-bar {
     height: 42px;
     flex-shrink: 0;
     z-index: 100;
+    margin-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
   .markup-btn {
     width: 38px;
