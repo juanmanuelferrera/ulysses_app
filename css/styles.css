@@ -1780,3 +1780,108 @@ select.input {
   color: var(--text-primary);
   border-color: var(--text-secondary);
 }
+
+
+/* === Mobile Layout === */
+@media (max-width: 768px) {
+  #app {
+    display: block;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #library-panel,
+  #sheets-panel,
+  #editor-panel {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%;
+    height: 100%;
+    transition: transform 0.25s ease;
+    border-right: none;
+  }
+
+  #library-panel { z-index: 3; transform: translateX(0); }
+  #sheets-panel { z-index: 2; transform: translateX(100%); }
+  #editor-panel { z-index: 1; transform: translateX(100%); }
+
+  /* States */
+  #app.mobile-sheets #library-panel { transform: translateX(-100%); }
+  #app.mobile-sheets #sheets-panel { transform: translateX(0); }
+  #app.mobile-sheets #editor-panel { transform: translateX(100%); }
+
+  #app.mobile-editor #library-panel { transform: translateX(-100%); }
+  #app.mobile-editor #sheets-panel { transform: translateX(-100%); }
+  #app.mobile-editor #editor-panel { transform: translateX(0); }
+
+  /* Override desktop hidden states */
+  #app.library-hidden #library-panel,
+  #app.sheets-hidden #sheets-panel {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #app.library-hidden,
+  #app.sheets-hidden,
+  #app.library-hidden.sheets-hidden {
+    grid-template-columns: unset;
+  }
+
+  /* Mobile back buttons */
+  .mobile-back {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 4px 8px;
+    margin-right: 4px;
+    border-radius: var(--radius-sm);
+  }
+  .mobile-back:hover {
+    background: var(--accent-light);
+  }
+  .mobile-back svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* Full width panels */
+  .panel-header {
+    padding: 12px 12px;
+  }
+
+  /* Editor toolbar adjustments */
+  .editor-toolbar {
+    padding: 6px 8px;
+  }
+
+  /* Larger touch targets */
+  .group-item, .filter-item {
+    padding: 10px 12px;
+    min-height: 40px;
+  }
+  .sheet-card {
+    padding: 12px;
+  }
+
+  /* Hide sidebar toggle on mobile */
+  #toggle-library,
+  #toggle-sheets {
+    display: none;
+  }
+
+  /* Make sheet list search full width */
+  .search-bar {
+    padding: 8px 12px;
+  }
+}
+
+/* Desktop: hide mobile-only elements */
+@media (min-width: 769px) {
+  .mobile-back {
+    display: none;
+  }
+}

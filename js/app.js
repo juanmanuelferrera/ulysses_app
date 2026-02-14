@@ -34,6 +34,7 @@ async function init() {
 }
 
 async function bootstrap() {
+  initMobile();
   await initDB();
 
   // Init editor
@@ -222,3 +223,51 @@ async function bootstrap() {
 export function getState() { return state; }
 
 document.addEventListener('DOMContentLoaded', init);
+
+
+// === Mobile Navigation ===
+function initMobile() {
+  const appEl = document.getElementById('app');
+  const isMobile = () => window.innerWidth <= 768;
+
+  // Back to library
+  document.getElementById('mobile-back-library')?.addEventListener('click', () => {
+    appEl.classList.remove('mobile-sheets', 'mobile-editor');
+  });
+
+  // Back to sheets
+  document.getElementById('mobile-back-sheets')?.addEventListener('click', () => {
+    appEl.classList.remove('mobile-editor');
+    appEl.classList.add('mobile-sheets');
+  });
+
+  // When a group is selected, show sheets panel
+  bus.on('group:select', () => {
+    if (isMobile()) {
+      appEl.classList.remove('mobile-editor');
+      appEl.classList.add('mobile-sheets');
+    }
+  });
+
+  // When a filter is selected, show sheets panel
+  bus.on('filter:select', () => {
+    if (isMobile()) {
+      appEl.classList.remove('mobile-editor');
+      appEl.classList.add('mobile-sheets');
+    }
+  });
+
+  // When a sheet is selected, show editor
+  bus.on('sheet:select', () => {
+    if (isMobile()) {
+      appEl.classList.add('mobile-editor');
+    }
+  });
+
+  // Handle resize: clean up mobile classes when going to desktop
+  window.addEventListener('resize', () => {
+    if (!isMobile()) {
+      appEl.classList.remove('mobile-sheets', 'mobile-editor');
+    }
+  });
+}
