@@ -17,6 +17,27 @@ export function initTags() {
     showNewTagModal();
   });
 
+  // Global right-click handler for all tag elements (sidebar + sheet cards)
+  document.addEventListener('contextmenu', (e) => {
+    const tagItem = e.target.closest('.tag-item');
+    const tagPill = e.target.closest('.tag-pill');
+    if (tagItem || tagPill) {
+      e.preventDefault();
+      e.stopPropagation();
+      const tagName = tagItem
+        ? tagItem.querySelector('span').textContent
+        : tagPill.textContent;
+      const tagColor = tagItem
+        ? tagItem.style.background
+        : tagPill.style.background;
+      // Find the matching tag
+      getTags().then(tags => {
+        const tag = tags.find(t => t.name === tagName);
+        if (tag) showTagContextMenu(e.clientX, e.clientY, tag);
+      });
+    }
+  });
+
   bus.on('sheet:loaded', (sheet) => {
     currentSheetId = sheet.id;
     renderSheetTags(sheet.id);
@@ -47,13 +68,6 @@ async function renderTagsSidebar() {
       }
     });
 
-    // Right-click context menu (Ulysses-style)
-    item.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      showTagContextMenu(e.clientX, e.clientY, tag);
-    });
-
     listEl.appendChild(item);
   }
 }
@@ -73,16 +87,7 @@ async function toggleTagOnSheet(sheetId, tag) {
 
 async function renderSheetTags(sheetId) {
   const statusEl = document.getElementById('status-group');
-  if (!statusEl) return;
-  const tags = await getSheetTags(sheetId);
-  statusEl.innerHTML = '';
-  for (const tag of tags) {
-    statusEl.appendChild(el('span', {
-      class: 'tag-pill',
-      text: tag.name,
-      style: `background: ${tag.color}; font-size: 10px;`,
-    }));
-  }
+  if (statusEl) statusEl.innerHTML = '';
 }
 
 function showTagContextMenu(x, y, tag) {
