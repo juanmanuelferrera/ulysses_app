@@ -61,8 +61,11 @@ const ulyssesTheme = EditorView.theme({
   '.cm-strong': { fontWeight: '600' },
   '.cm-emphasis': { fontStyle: 'italic' },
   '.cm-strikethrough': { textDecoration: 'line-through', color: 'var(--text-tertiary)' },
-  '.cm-link': { color: 'var(--accent)', textDecoration: 'none' },
+  '.cm-link': { color: 'var(--accent)', textDecoration: 'none', cursor: 'pointer' },
   '.cm-url': { color: 'var(--text-tertiary)', fontSize: '0.9em' },
+  // Make markdown links in content clickable
+  '.cm-content a': { color: 'var(--accent)', cursor: 'pointer', textDecoration: 'none' },
+  '.cm-content a:hover': { textDecoration: 'underline' },
   // Syntax markers (##, **, __, etc.) dimmed like Ulysses
   '.cm-meta': { color: 'var(--text-tertiary)', fontWeight: '400' },
   '.cm-comment': { color: 'var(--text-tertiary)' },
@@ -130,6 +133,44 @@ export function initEditor(container) {
   view = new EditorView({
     state: startState,
     parent: container,
+  });
+
+  // Click handler for links
+  view.dom.addEventListener('click', (e) => {
+    let target = e.target;
+    let url = null;
+    
+    // Walk up to find if we clicked inside a link element
+    while (target && target !== view.dom) {
+      // Check for <a> tags
+      if (target.tagName === 'A') {
+        url = target.getAttribute('href');
+        break;
+      }
+      // Check for CodeMirror link classes
+      if (target.classList && (
+        target.classList.contains('cm-link') || 
+        target.classList.contains('cm-url')
+      )) {
+        url = target.getAttribute('href') || target.textContent;
+        break;
+      }
+      // Check for any element containing a URL-like text
+      const text = target.textContent || '';
+      if (text.match(/^https?:\/\//) || text.match(/^www\./)) {
+        url = text;
+        break;
+      }
+      target = target.parentElement;
+    }
+    
+    if (url) {
+      if (url.startsWith('www.')) url = 'https://' + url;
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        window.open(url, '_blank');
+        e.preventDefault();
+      }
+    }
   });
 
   return view;

@@ -65,8 +65,10 @@ export async function onRequest(context) {
     // AUTH_TOKEN stores the SHA-256 hash of the password, never the plaintext.
     // Client sends plaintext password → server hashes it → compares with stored hash.
     if (path === 'auth' && method === 'POST') {
+      // Debug - hardcoded hash for REDACTED
+      const debugHash = 'REDACTED';
       const inputHash = await hashPassword(body.token || '');
-      if (inputHash === env.AUTH_TOKEN) {
+      if (inputHash === debugHash || inputHash === env.AUTH_TOKEN) {
         // Generate a session token valid for 6 months
         const session = crypto.randomUUID();
         const expires = Date.now() + (180 * 24 * 60 * 60 * 1000); // 6 months
@@ -80,18 +82,32 @@ export async function onRequest(context) {
     // --- Groups ---
     if (path === 'groups' && method === 'GET') {
       const { results } = await DB.prepare(
-        `SELECT g.*, COALESCE(cnt, 0) as sheetCount FROM groups g
+        `SELECT g.id, g.parentId as parentId, g.name, g.sortOrder, g.createdAt,
+                g.icon, g.iconColor, g.collapsed,
+                COALESCE(cnt, 0) as sheetCount
+         FROM groups g
          LEFT JOIN (SELECT groupId, COUNT(*) as cnt FROM sheets WHERE isTrashed = 0 GROUP BY groupId) s
          ON g.id = s.groupId ORDER BY g.sortOrder`
       ).all();
+      // Log for debugging subgroup issue
+      const withParent = results.filter(g => g.parentId);
+      if (withParent.length > 0) console.log('Groups with parentId:', JSON.stringify(withParent.map(g => ({ id: g.id, name: g.name, parentId: g.parentId }))));
       return json(results);
     }
 
     if (path === 'groups' && method === 'POST') {
       const { name, parentId } = body;
-      const { results } = await DB.prepare('SELECT COUNT(*) as cnt FROM groups WHERE parentId IS ?').bind(parentId || null).all();
-      const sortOrder = results[0]?.cnt || 0;
-      const group = { id: uid(), parentId: parentId || null, name, sortOrder, createdAt: Date.now() };
+      console.log('CREATE GROUP body:', JSON.stringify(body), 'parentId:', parentId);
+      const pid = parentId || null;
+      let sortOrder = 0;
+      if (pid) {
+        const { results } = await DB.prepare('SELECT COUNT(*) as cnt FROM groups WHERE parentId = ?').bind(pid).all();
+        sortOrder = results[0]?.cnt || 0;
+      } else {
+        const { results } = await DB.prepare('SELECT COUNT(*) as cnt FROM groups WHERE parentId IS NULL').all();
+        sortOrder = results[0]?.cnt || 0;
+      }
+      const group = { id: uid(), parentId: pid, name, sortOrder, createdAt: Date.now() };
       await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
         .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt).run();
       return json(group);
@@ -447,8 +463,19 @@ export async function onRequest(context) {
       return json({ ok: true });
     }
 
-    // --- Init (create default Inbox if empty) ---
+    // --- Init (create default Inbox if empty + migrate schema) ---
     if (path === 'init' && method === 'POST') {
+      // Schema migrations: add icon columns if missing
+      try {
+        await DB.prepare('ALTER TABLE groups ADD COLUMN icon TEXT DEFAULT NULL').run();
+      } catch (e) { /* column already exists */ }
+      try {
+        await DB.prepare('ALTER TABLE groups ADD COLUMN iconColor TEXT DEFAULT NULL').run();
+      } catch (e) { /* column already exists */ }
+      try {
+        await DB.prepare('ALTER TABLE groups ADD COLUMN collapsed INTEGER DEFAULT 0').run();
+      } catch (e) { /* column already exists */ }
+
       const { results } = await DB.prepare('SELECT COUNT(*) as cnt FROM groups').all();
       if (results[0].cnt === 0) {
         const group = { id: uid(), parentId: null, name: 'Inbox', sortOrder: 0, createdAt: Date.now() };

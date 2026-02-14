@@ -180,8 +180,15 @@ html, body {
 
 .group-item .group-count {
   font-size: 11px;
-  color: var(--text-tertiary);
+  font-weight: 600;
+  color: var(--text-secondary);
   margin-left: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 18px;
 }
 
 .group-item.child {
@@ -192,6 +199,37 @@ html, body {
   background: var(--accent-light);
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
+}
+
+/* Collapse chevron / spacer */
+.group-chevron,
+.group-chevron-spacer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
+.group-chevron {
+  cursor: pointer;
+  opacity: 0.5;
+  transition: transform 0.2s ease, opacity 0.15s;
+  transform: rotate(0deg);
+}
+
+.group-chevron.open {
+  transform: rotate(90deg);
+}
+
+.group-chevron:hover {
+  opacity: 1;
+}
+
+.group-children {
+  transition: none;
 }
 
 /* Filter items (smart filters in sidebar) */
@@ -233,8 +271,15 @@ html, body {
 
 .filter-item .group-count {
   font-size: 11px;
-  color: var(--text-tertiary);
+  font-weight: 600;
+  color: var(--text-secondary);
   margin-left: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 18px;
 }
 
 .library-divider {
@@ -422,6 +467,84 @@ html, body {
 .sheet-card-group {
   color: var(--accent);
   font-weight: 500;
+}
+
+/* === Icon Picker === */
+.icon-picker {
+  position: fixed;
+  z-index: 3000;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 12px;
+  width: 272px;
+}
+
+.icon-picker-colors {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.icon-picker-color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.icon-picker-color-swatch:hover {
+  transform: scale(1.15);
+}
+
+.icon-picker-color-swatch.active {
+  border-color: var(--text-primary);
+  transform: scale(1.15);
+}
+
+.icon-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.icon-picker-cell {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.icon-picker-cell:hover {
+  background: var(--bg-hover);
+}
+
+.icon-picker-cell.active {
+  background: var(--accent-light);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.icon-picker-actions {
+  display: flex;
+  justify-content: space-between;
+}
+
+/* Group icon colored */
+.group-item .group-icon-custom svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* === Editor Panel === */

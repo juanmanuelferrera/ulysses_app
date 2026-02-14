@@ -1,6 +1,7 @@
 // library.js — Groups sidebar with smart filters, favorites, trash
 import { bus, el, appConfirm } from './utils.js';
 import { createGroup, updateGroup, deleteGroup, getGroups, getSheets, reorderGroups, getFilteredSheets, getFilterCounts, emptyTrash } from './db.js';
+import { renderIcon, showIconPicker, ICON_COLORS } from './icons.js';
 
 let activeGroupId = null;
 let activeFilter = null;  // 'all', 'recent', 'favorites', 'trash'
@@ -43,10 +44,18 @@ export function initLibrary() {
 
   // Context menu
   treeEl.addEventListener('contextmenu', (e) => {
-    const item = e.target.closest('.group-item');
-    if (!item) return;
-    e.preventDefault();
-    showContextMenu(e.clientX, e.clientY, item.dataset.id);
+    const groupItem = e.target.closest('.group-item');
+    const filterItem = e.target.closest('.filter-item');
+    
+    if (groupItem) {
+      e.preventDefault();
+      const isChild = groupItem.classList.contains('child');
+      showContextMenu(e.clientX, e.clientY, groupItem.dataset.id, isChild);
+    } else if (filterItem) {
+      e.preventDefault();
+      const filterId = filterItem.dataset.filter;
+      showFilterContextMenu(e.clientX, e.clientY, filterId);
+    }
   });
 
   // Drag and drop
@@ -75,27 +84,26 @@ export function initLibrary() {
     const sheetId = e.dataTransfer.getData('text/sheet-id');
     const sheetIdsJson = e.dataTransfer.getData('text/sheet-ids');
     const toItem = e.target.closest('.group-item');
-    if (!toItem) return;
-    const toId = toItem.dataset.id;
 
-    if (sheetIdsJson) {
-      // Moving sheets to a group
-      const { moveSheets } = await import('./db.js');
-      const ids = JSON.parse(sheetIdsJson);
-      await moveSheets(ids, toId);
-      bus.emit('sheet:moved');
-    } else if (sheetId) {
-      const { moveSheet } = await import('./db.js');
-      await moveSheet(sheetId, toId);
-      bus.emit('sheet:moved');
-    } else if (fromId && fromId !== toId) {
-      const groups = await getGroups();
-      const ids = groups.map(g => g.id);
-      const fromIdx = ids.indexOf(fromId);
-      const toIdx = ids.indexOf(toId);
-      ids.splice(fromIdx, 1);
-      ids.splice(toIdx, 0, fromId);
-      await reorderGroups(ids);
+    if (toItem) {
+      const toId = toItem.dataset.id;
+      if (sheetIdsJson) {
+        const { moveSheets } = await import('./db.js');
+        const ids = JSON.parse(sheetIdsJson);
+        await moveSheets(ids, toId);
+        bus.emit('sheet:moved');
+      } else if (sheetId) {
+        const { moveSheet } = await import('./db.js');
+        await moveSheet(sheetId, toId);
+        bus.emit('sheet:moved');
+      } else if (fromId && fromId !== toId) {
+        // Nest: set the dragged group as a child of the target group
+        await updateGroup(fromId, { parentId: toId });
+        bus.emit('group:updated');
+      }
+    } else if (fromId) {
+      // Dropped on empty space — move to top level
+      await updateGroup(fromId, { parentId: null });
       bus.emit('group:updated');
     }
   });
@@ -138,16 +146,27 @@ export async function renderGroups(groups) {
   // Divider
   treeEl.appendChild(el('div', { class: 'library-divider' }));
 
-  // Groups section — use sheetCount from API (no extra calls needed)
-  const topLevel = groups.filter(g => !g.parentId);
-  const children = groups.filter(g => g.parentId);
+  // Groups section
+  const topLevel = groups.filter(g => g.parentId == null);
+  const children = groups.filter(g => g.parentId != null);
+  console.log('[renderGroups] topLevel:', topLevel.map(g => g.name), 'children:', children.map(g => g.name));
 
   for (const group of topLevel) {
-    treeEl.appendChild(createGroupItem(group, group.sheetCount || 0, false));
-
     const kids = children.filter(c => c.parentId === group.id);
-    for (const kid of kids) {
-      treeEl.appendChild(createGroupItem(kid, kid.sheetCount || 0, true));
+    console.log(`[renderGroups] "${group.name}" (id:${group.id}) → ${kids.length} kids, collapsed:${group.collapsed}`);
+    treeEl.appendChild(createGroupItem(group, group.sheetCount || 0, false, kids.length > 0));
+
+    if (kids.length > 0) {
+      const childContainer = el('div', {
+        class: 'group-children',
+        dataset: { parent: group.id },
+      });
+      if (group.collapsed) childContainer.style.display = 'none';
+      for (const kid of kids) {
+        childContainer.appendChild(createGroupItem(kid, kid.sheetCount || 0, true, false));
+      }
+      treeEl.appendChild(childContainer);
+      console.log(`[renderGroups]   → childContainer appended, display:${childContainer.style.display}, children:${childContainer.childElementCount}`);
     }
   }
 
@@ -159,16 +178,53 @@ export async function renderGroups(groups) {
   }
 }
 
-function createGroupItem(group, count, isChild) {
+function createGroupItem(group, count, isChild, hasKids) {
+  // Build icon element
+  let iconEl;
+  if (group.icon) {
+    const colorHex = group.iconColor
+      ? (ICON_COLORS.find(c => c.id === group.iconColor)?.hex || 'currentColor')
+      : 'currentColor';
+    const svg = renderIcon(group.icon, colorHex, 16);
+    iconEl = el('span', { class: 'group-icon group-icon-custom' });
+    if (svg) iconEl.appendChild(svg);
+  } else {
+    iconEl = el('span', { class: 'group-icon', html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' });
+  }
+
+  const children = [];
+
+  // Chevron or spacer (keeps alignment consistent)
+  if (!isChild) {
+    if (hasKids) {
+      const chevron = el('span', {
+        class: `group-chevron${group.collapsed ? '' : ' open'}`,
+        html: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>',
+        onClick: async (e) => {
+          e.stopPropagation();
+          const collapsed = !group.collapsed;
+          group.collapsed = collapsed;
+          chevron.classList.toggle('open', !collapsed);
+          const container = treeEl.querySelector(`[data-parent="${group.id}"]`);
+          if (container) container.style.display = collapsed ? 'none' : '';
+          await updateGroup(group.id, { collapsed: collapsed ? 1 : 0 });
+        },
+      });
+      children.push(chevron);
+    } else {
+      children.push(el('span', { class: 'group-chevron-spacer' }));
+    }
+  }
+
+  children.push(iconEl);
+  children.push(el('span', { class: 'group-name', text: group.name }));
+  children.push(el('span', { class: 'group-count', text: String(count) }));
+
   const item = el('div', {
     class: `group-item${isChild ? ' child' : ''}${group.id === activeGroupId ? ' active' : ''}`,
     dataset: { id: group.id },
     draggable: 'true',
-  }, [
-    el('span', { class: 'group-icon', html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' }),
-    el('span', { class: 'group-name', text: group.name }),
-    el('span', { class: 'group-count', text: String(count) }),
-  ]);
+  }, children);
 
   item.addEventListener('click', () => {
     document.getElementById('sheets-panel-title').textContent = group.name;
@@ -204,42 +260,90 @@ function startRename(groupId) {
   });
 }
 
-function showContextMenu(x, y, groupId) {
+function showContextMenu(x, y, groupId, isChild = false) {
   document.querySelector('.context-menu')?.remove();
 
-  const menu = el('div', { class: 'context-menu fade-in' }, [
+  const items = [
     el('div', { class: 'context-menu-item', text: 'New Sheet', onClick: async () => {
       const { createSheet } = await import('./db.js');
       const sheet = await createSheet(groupId);
       bus.emit('sheet:created', sheet);
       closeMenu();
     }}),
-    el('div', { class: 'context-menu-item', text: 'New Sub-group', onClick: async () => {
+    el('div', { class: 'context-menu-item', text: 'New Group\u2026', onClick: async () => {
       closeMenu();
-      const group = await createGroup('New Sub-group', groupId);
+      console.log('[library] Creating subgroup under parentId:', groupId);
+      const group = await createGroup('New Group', groupId);
+      console.log('[library] Created group:', JSON.stringify(group));
       pendingRenameId = group.id;
       bus.emit('group:created', group);
     }}),
-    el('div', { class: 'context-menu-divider' }),
-    el('div', { class: 'context-menu-item', text: 'Rename', onClick: () => {
-      startRename(groupId);
-      closeMenu();
-    }}),
-    el('div', { class: 'context-menu-divider' }),
-    el('div', { class: 'context-menu-item danger', text: 'Delete', onClick: async () => {
-      closeMenu();
-      if (await appConfirm('Delete this group and all its sheets?')) {
-        await deleteGroup(groupId);
-        bus.emit('group:deleted');
-      }
-    }}),
-  ]);
+  ];
+
+  items.push(el('div', { class: 'context-menu-divider' }));
+  items.push(el('div', { class: 'context-menu-item', text: 'Change Icon...', onClick: async () => {
+    closeMenu();
+    const item = treeEl.querySelector(`[data-id="${groupId}"]`);
+    const rect = item?.getBoundingClientRect();
+    const result = await showIconPicker(
+      rect ? rect.right + 4 : x, rect ? rect.top : y,
+      item?.dataset.icon, item?.dataset.iconColor
+    );
+    if (result) {
+      await updateGroup(groupId, { icon: result.icon, iconColor: result.color });
+      bus.emit('group:updated');
+    }
+  }}));
+  items.push(el('div', { class: 'context-menu-item', text: 'Rename', onClick: () => {
+    startRename(groupId);
+    closeMenu();
+  }}));
+  items.push(el('div', { class: 'context-menu-divider' }));
+  items.push(el('div', { class: 'context-menu-item danger', text: 'Move to Trash', onClick: async () => {
+    closeMenu();
+    if (await appConfirm('Move this group and all its sheets to Trash?')) {
+      await deleteGroup(groupId);
+      bus.emit('group:deleted');
+    }
+  }}));
+
+  const menu = el('div', { class: 'context-menu fade-in' }, items);
 
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
   document.body.appendChild(menu);
 
   const closeMenu = () => menu.remove();
+  setTimeout(() => {
+    document.addEventListener('click', closeMenu, { once: true });
+  }, 10);
+}
+
+// --- Filter context menu ---
+function showFilterContextMenu(x, y, filterId) {
+  document.querySelector('.context-menu')?.remove();
+
+  const menu = el('div', { class: 'context-menu fade-in' });
+  const closeMenu = () => menu.remove();
+
+  // Only show menu for Trash filter
+  if (filterId === 'trash') {
+    menu.appendChild(el('div', { class: 'context-menu-item danger', text: 'Delete All Files in Trash', onClick: async () => {
+      closeMenu();
+      if (await appConfirm('Permanently delete all items in Trash?')) {
+        await emptyTrash();
+        bus.emit('group:updated');
+      }
+    }}));
+  } else {
+    // Don't show menu for other filters
+    return;
+  }
+
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  document.body.appendChild(menu);
+
   setTimeout(() => {
     document.addEventListener('click', closeMenu, { once: true });
   }, 10);
