@@ -1962,3 +1962,73 @@ select.input {
     display: none;
   }
 }
+
+
+/* === Native App Feel === */
+html, body {
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  touch-action: manipulation;
+}
+
+#app {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  /* Compact editor toolbar */
+  .editor-toolbar {
+    flex-wrap: nowrap;
+    gap: 2px;
+    padding: 4px 8px;
+    min-height: 36px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .editor-toolbar .btn-icon {
+    padding: 4px;
+    min-width: 28px;
+    flex-shrink: 0;
+  }
+
+  /* Hide word count on mobile - access via button */
+  .editor-toolbar-center {
+    display: none;
+  }
+
+  /* Compact toolbar sections */
+  .editor-toolbar-left,
+  .editor-toolbar-right {
+    gap: 2px;
+  }
+
+  /* Editor fills available space */
+  #editor-panel {
+    display: flex;
+    flex-direction: column;
+  }
+  .editor-container {
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  /* Prevent text selection causing scroll issues */
+  .library-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Sheet list smooth scroll */
+  .sheet-list {
+    -webkit-overflow-scrolling: touch;
+  }
+}
