@@ -1,7 +1,7 @@
 // app.js — Init, event bus wiring, global state
 import { bus } from './utils.js';
 import { initDB, getGroups, getSheets, getSheet, updateSheet, createSheet, getSetting, setSetting, computeStats, getFilteredSheets } from './db.js';
-import { initEditor, setContent, getContent, focus as editorFocus } from './editor.js';
+import { initEditor, setContent, getContent, clearEditor, enableEditor, focus as editorFocus } from './editor.js';
 import { initLibrary, renderGroups, getActiveGroupId, getActiveFilter } from './library.js';
 import { initSheetList, renderSheets, setActiveSheet } from './sheets.js';
 import { initTags } from './tags.js';
@@ -34,6 +34,8 @@ async function init() {
 }
 
 async function bootstrap() {
+  bus.on('sheet:none', () => { clearEditor(); });
+
   initMobile();
   await initDB();
 

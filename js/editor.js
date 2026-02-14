@@ -179,6 +179,7 @@ export function initEditor(container) {
 export function setContent(sheetId, content, cursorAtEnd = true) {
   if (!view) return;
   currentSheetId = sheetId;
+  enableEditor();
   const doc = content || '';
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: doc },
@@ -190,6 +191,23 @@ export function setContent(sheetId, content, cursorAtEnd = true) {
 export function getContent() {
   if (!view) return '';
   return view.state.doc.toString();
+}
+
+export function clearEditor() {
+  if (!view) return;
+  currentSheetId = null;
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: '' },
+  });
+  view.dom.style.opacity = '0.5';
+  view.dom.style.pointerEvents = 'none';
+  updateStats('');
+}
+
+export function enableEditor() {
+  if (!view) return;
+  view.dom.style.opacity = '1';
+  view.dom.style.pointerEvents = 'auto';
 }
 
 export function focus() {
