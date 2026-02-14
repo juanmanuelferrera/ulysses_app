@@ -318,14 +318,19 @@ function startRename(groupId) {
 function showContextMenu(x, y, groupId, isChild = false) {
   document.querySelector('.context-menu')?.remove();
 
-  const items = [
-    el('div', { class: 'context-menu-item', text: 'New Sheet', onClick: async () => {
+  const ctxGroup = allGroups.find(g => g.id === groupId);
+  const ctxIsProject = ctxGroup && ctxGroup.section === 'projects' && !ctxGroup.parentId;
+
+  const items = [];
+  if (!ctxIsProject) {
+    items.push(el('div', { class: 'context-menu-item', text: 'New Sheet', onClick: async () => {
       const { createSheet } = await import('./db.js');
       const sheet = await createSheet(groupId);
       bus.emit('sheet:created', sheet);
       closeMenu();
-    }}),
-    el('div', { class: 'context-menu-item', text: 'New Group\u2026', onClick: async () => {
+    }}));
+  }
+  items.push(el('div', { class: 'context-menu-item', text: 'New Group\u2026', onClick: async () => {
       closeMenu();
       const group = await createGroup('New Group', groupId);
       console.log('[library] Created group:', JSON.stringify(group));
