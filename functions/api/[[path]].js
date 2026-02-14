@@ -113,6 +113,23 @@ export async function onRequest(context) {
     // --- Auth ---
     if (path === 'auth' && method === 'POST') {
       const inputHash = await hashPassword(body.token || '');
+
+      // Ensure users table exists
+      await DB.prepare('CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, passwordHash TEXT NOT NULL UNIQUE, createdAt INTEGER)').run();
+      try { await DB.prepare('ALTER TABLE groups ADD COLUMN userId TEXT DEFAULT NULL').run(); } catch(e){}
+      try { await DB.prepare('ALTER TABLE tags ADD COLUMN userId TEXT DEFAULT NULL').run(); } catch(e){}
+
+      // Auto-create admin user if none exist
+      const { results: uc } = await DB.prepare('SELECT COUNT(*) as cnt FROM users').all();
+      if (uc[0].cnt === 0 && inputHash === env.AUTH_TOKEN) {
+        const adminId = crypto.randomUUID();
+        await DB.prepare('INSERT INTO users (id, name, passwordHash, createdAt) VALUES (?, ?, ?, ?)')
+          .bind(adminId, 'Admin', env.AUTH_TOKEN, Date.now()).run();
+        await DB.prepare('UPDATE groups SET userId = ? WHERE userId IS NULL').bind(adminId).run();
+        await DB.prepare('UPDATE tags SET userId = ? WHERE userId IS NULL').bind(adminId).run();
+      }
+
+      // Look up user
       const { results: users } = await DB.prepare(
         'SELECT id, name FROM users WHERE passwordHash = ?'
       ).bind(inputHash).all();
