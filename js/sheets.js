@@ -249,7 +249,7 @@ export function initSheetList() {
   });
 
   // Reset sort when selecting a group
-  bus.on('group:select', async () => {
+  bus.on('group:select', async (groupId) => {
     if (currentSortBy === 'group' || currentSortBy === 'created') {
       currentSortBy = 'manual';
     }
@@ -257,8 +257,8 @@ export function initSheetList() {
     if (tagFilterVisible) renderTagFilterBar();
     const newBtn = document.getElementById('new-sheet-btn');
     if (newBtn) newBtn.style.display = '';
-    await refreshList();
-    const groupId = getActiveGroupId();
+    const sheets = await getSheets(groupId, currentSortBy);
+    renderSheets(sheets);
     if (currentSheets.length > 0) {
       bus.emit('sheet:select', currentSheets[0].id);
     } else {
