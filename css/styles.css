@@ -1920,3 +1920,14 @@ select.input {
 .logout-header-btn:hover {
   opacity: 1;
 }
+
+/* Library scroll wrapper */
+.library-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.library-scroll .library-tree {
+  flex: none;
+}
