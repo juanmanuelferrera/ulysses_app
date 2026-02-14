@@ -1,7 +1,7 @@
 // sheets.js — Sheet list panel with multi-select, favorites, trash, sorting
 import { bus, el, formatDate, wordCount, truncate, appConfirm, showUndoToast } from './utils.js';
 import { createSheet, trashSheet, trashSheets, restoreSheet, deleteSheet, getSheets, getFilteredSheets,
-         reorderSheets, moveSheet, moveSheets, toggleFavorite, emptyTrash, mergeSheets, undoMerge, getSheetTags } from './db.js';
+         reorderSheets, moveSheet, moveSheets, toggleFavorite, emptyTrash, mergeSheets, undoMerge, getSheetTags, getTags } from './db.js';
 import { getActiveGroupId, getActiveFilter } from './library.js';
 
 let listEl = null;
@@ -10,6 +10,10 @@ let selectedIds = new Set();
 let lastClickedId = null;
 let allSheetIds = [];
 let currentSortBy = 'manual';
+let activeTagFilters = new Set();
+let tagFilterMode = 'or';
+let tagFilterVisible = false;
+let currentSheets = [];
 
 export function setActiveSheet(id) {
   activeSheetId = id;
@@ -85,6 +89,21 @@ export function initSheetList() {
       const preview = card.querySelector('.sheet-card-preview')?.textContent.toLowerCase() || '';
       card.style.display = (title.includes(q) || preview.includes(q)) ? '' : 'none';
     });
+  });
+
+  // Tag filter toggle
+  const tagToggle = document.getElementById('tag-filter-toggle');
+  const tagBar = document.getElementById('tag-filter-bar');
+  tagToggle?.addEventListener('click', () => {
+    tagFilterVisible = !tagFilterVisible;
+    tagToggle.classList.toggle('active', tagFilterVisible);
+    tagBar.style.display = tagFilterVisible ? '' : 'none';
+    if (tagFilterVisible) {
+      renderTagFilterBar();
+    } else {
+      activeTagFilters.clear();
+      applyTagFilter();
+    }
   });
 
   // Drag and drop
@@ -215,6 +234,7 @@ export function initSheetList() {
         ));
       }
     }
+    if (tagFilterVisible) renderTagFilterBar();
   });
 
   bus.on('sheet:none', () => {
@@ -233,12 +253,16 @@ export function initSheetList() {
     if (currentSortBy === 'group' || currentSortBy === 'created') {
       currentSortBy = 'manual';
     }
+    activeTagFilters.clear();
+    if (tagFilterVisible) renderTagFilterBar();
   });
 
   // Listen for filter changes
   bus.on('filter:select', async (filter) => {
     // Default to date sort for filter views
     if (currentSortBy === 'manual') currentSortBy = 'date';
+    activeTagFilters.clear();
+    if (tagFilterVisible) renderTagFilterBar();
     document.getElementById('sheets-panel-title').textContent =
       filter === 'all' ? 'All' :
       filter === 'recent' ? 'Last 7 Days' :
@@ -248,6 +272,23 @@ export function initSheetList() {
     const newBtn = document.getElementById('new-sheet-btn');
     if (newBtn) newBtn.style.display = filter === 'trash' ? 'none' : '';
     const sheets = await getFilteredSheets(filter);
+    renderSheets(sheets);
+    if (sheets.length > 0) {
+      bus.emit('sheet:select', sheets[0].id);
+    } else {
+      bus.emit('sheet:none');
+    }
+  });
+
+  // Tag reveal: show all sheets with a specific tag
+  bus.on('tag:reveal', async (tag) => {
+    if (currentSortBy === 'manual') currentSortBy = 'date';
+    activeTagFilters.clear();
+    document.getElementById('sheets-panel-title').textContent = 'Tag: ' + tag.name;
+    const newBtn = document.getElementById('new-sheet-btn');
+    if (newBtn) newBtn.style.display = 'none';
+    document.querySelectorAll('.group-item, .filter-item').forEach(el => el.classList.remove('active'));
+    const sheets = await getFilteredSheets('tag:' + tag.id);
     renderSheets(sheets);
     if (sheets.length > 0) {
       bus.emit('sheet:select', sheets[0].id);
@@ -303,10 +344,29 @@ function dateBuckets(sheets, field) {
 
 export function renderSheets(sheets) {
   if (!listEl) return;
+  currentSheets = sheets;
+
+  let filtered = sheets;
+  if (activeTagFilters.size > 0) {
+    filtered = sheets.filter(sheet => {
+      const ids = (sheet.tags || []).map(t => t.id);
+      return tagFilterMode === 'and'
+        ? [...activeTagFilters].every(id => ids.includes(id))
+        : [...activeTagFilters].some(id => ids.includes(id));
+    });
+  }
+
   listEl.innerHTML = '';
 
-  if (sheets.length === 0) {
-    bus.emit('sheet:none');
+  if (filtered.length === 0) {
+    if (activeTagFilters.size > 0) {
+      listEl.appendChild(el('div', { class: 'empty-state' }, [
+        el('div', { class: 'empty-state-title', text: 'No Matching Sheets' }),
+        el('div', { class: 'empty-state-text', text: 'No sheets match the selected tags' }),
+      ]));
+    } else {
+      bus.emit('sheet:none');
+    }
     return;
   }
 
@@ -316,17 +376,17 @@ export function renderSheets(sheets) {
 
   // Sort client-side for filter views
   if (isFilterView && currentSortBy === 'title') {
-    sheets.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    filtered.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   } else if (isFilterView && currentSortBy === 'created') {
-    sheets.sort((a, b) => b.createdAt - a.createdAt);
+    filtered.sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  allSheetIds = sheets.map(s => s.id);
+  allSheetIds = filtered.map(s => s.id);
 
   if (groupByProject) {
     // Group sheets by groupId
     const groups = new Map();
-    for (const sheet of sheets) {
+    for (const sheet of filtered) {
       const key = sheet.groupId;
       if (!groups.has(key)) {
         groups.set(key, { name: sheet.groupName || 'Untitled', sheets: [] });
@@ -348,7 +408,7 @@ export function renderSheets(sheets) {
   } else if (groupByDate) {
     // Group sheets by date buckets
     const dateField = currentSortBy === 'created' ? 'createdAt' : 'updatedAt';
-    const buckets = dateBuckets(sheets, dateField);
+    const buckets = dateBuckets(filtered, dateField);
 
     for (const bucket of buckets) {
       const separator = el('div', { class: 'sheet-group-separator' }, [
@@ -362,7 +422,7 @@ export function renderSheets(sheets) {
       }
     }
   } else {
-    for (const sheet of sheets) {
+    for (const sheet of filtered) {
       listEl.appendChild(createSheetCard(sheet, isFilterView));
     }
   }
@@ -659,4 +719,76 @@ async function showMoveModal(sheetIds) {
   overlay.appendChild(modal);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   document.body.appendChild(overlay);
+}
+
+
+// --- Tag Filter Bar ---
+async function renderTagFilterBar() {
+  const bar = document.getElementById('tag-filter-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+
+  const usedTagMap = new Map();
+  for (const sheet of currentSheets) {
+    for (const tag of (sheet.tags || [])) {
+      if (!usedTagMap.has(tag.id)) usedTagMap.set(tag.id, { ...tag, count: 0 });
+      usedTagMap.get(tag.id).count++;
+    }
+  }
+
+  let tags = [...usedTagMap.values()];
+  if (tags.length === 0) {
+    const allTags = await getTags();
+    tags = allTags.map(t => ({ ...t, count: 0 }));
+  }
+
+  if (tags.length === 0) {
+    bar.appendChild(el('span', { style: 'font-size:11px; color:var(--text-tertiary);', text: 'No tags yet' }));
+    return;
+  }
+
+  for (const tag of tags) {
+    const chip = el('div', {
+      class: 'tag-filter-chip' + (activeTagFilters.has(tag.id) ? ' selected' : ''),
+      style: 'background:' + tag.color,
+      text: tag.name + (tag.count ? ' (' + tag.count + ')' : ''),
+    });
+
+    chip.addEventListener('click', (e) => {
+      if (e.metaKey || e.ctrlKey) {
+        if (activeTagFilters.has(tag.id)) activeTagFilters.delete(tag.id);
+        else activeTagFilters.add(tag.id);
+      } else {
+        if (activeTagFilters.has(tag.id) && activeTagFilters.size === 1) {
+          activeTagFilters.clear();
+        } else {
+          activeTagFilters.clear();
+          activeTagFilters.add(tag.id);
+        }
+      }
+      renderTagFilterBar();
+      applyTagFilter();
+    });
+
+    bar.appendChild(chip);
+  }
+
+  if (activeTagFilters.size > 1) {
+    const modeBtn = el('span', {
+      class: 'tag-filter-mode',
+      text: tagFilterMode === 'or' ? 'OR' : 'AND',
+    });
+    modeBtn.addEventListener('click', () => {
+      tagFilterMode = tagFilterMode === 'or' ? 'and' : 'or';
+      modeBtn.textContent = tagFilterMode === 'or' ? 'OR' : 'AND';
+      applyTagFilter();
+    });
+    bar.appendChild(modeBtn);
+  }
+}
+
+function applyTagFilter() {
+  renderSheets(currentSheets);
+  const firstCard = listEl.querySelector('.sheet-card');
+  if (firstCard) bus.emit('sheet:select', firstCard.dataset.id);
 }

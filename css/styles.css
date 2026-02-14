@@ -881,7 +881,7 @@ select.input {
 
 .search-bar input {
   width: 100%;
-  padding: 6px 12px 6px 32px;
+  padding: 6px 30px 6px 32px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-tertiary);
@@ -908,6 +908,71 @@ select.input {
   width: 14px;
   height: 14px;
   color: var(--text-tertiary);
+}
+
+.search-tag-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all var(--transition);
+}
+.search-tag-toggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+.search-tag-toggle.active {
+  color: var(--accent);
+  background: rgba(0,122,255,0.12);
+}
+
+.tag-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 12px 8px;
+  align-items: center;
+}
+
+.tag-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  transition: all var(--transition);
+  border: 1.5px solid transparent;
+}
+.tag-filter-chip:hover {
+  color: #fff;
+  filter: brightness(1.1);
+}
+.tag-filter-chip.selected {
+  color: #fff;
+  border-color: #fff;
+  box-shadow: 0 0 6px rgba(255,255,255,0.25);
+}
+
+.tag-filter-mode {
+  font-size: 10px;
+  color: var(--accent);
+  cursor: pointer;
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.tag-filter-mode:hover {
+  background: var(--bg-tertiary);
 }
 
 /* === Goals === */

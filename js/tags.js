@@ -95,6 +95,11 @@ function showTagContextMenu(x, y, tag) {
   document.querySelector('.context-menu')?.remove();
 
   const menu = el('div', { class: 'context-menu fade-in' }, [
+    el('div', { class: 'context-menu-item', text: 'Reveal Sheets…', onClick: () => {
+      closeMenu();
+      bus.emit('tag:reveal', tag);
+    }}),
+    el('div', { class: 'context-menu-divider' }),
     el('div', { class: 'context-menu-item', text: 'Rename', onClick: () => {
       closeMenu();
       showRenameTagModal(tag);

@@ -513,6 +513,15 @@ async function getFilteredSheets(filter, DB) {
   const sevenDays = 7 * 24 * 60 * 60 * 1000;
   let results;
   const joinSelect = 'SELECT sheets.*, groups.name AS groupName FROM sheets LEFT JOIN groups ON sheets.groupId = groups.id';
+
+  if (filter.startsWith('tag:')) {
+    const tagId = filter.slice(4);
+    const results = (await DB.prepare(
+      joinSelect + ' INNER JOIN sheet_tags st ON sheets.id = st.sheetId WHERE st.tagId = ? AND sheets.isTrashed = 0 ORDER BY sheets.updatedAt DESC'
+    ).bind(tagId).all()).results;
+    return results;
+  }
+
   switch (filter) {
     case 'all':
       results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 ORDER BY sheets.updatedAt DESC`).all()).results;
