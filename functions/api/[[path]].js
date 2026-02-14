@@ -41,7 +41,7 @@ export async function onRequest(context) {
   // Auth check
   let userId = null;
   let isAdmin = false;
-  if (path !== 'auth') {
+  if (path !== 'auth' && path !== 'init') {
     const token = request.headers.get('Authorization')?.replace('Bearer ', '');
     if (!token) return json({ error: 'Unauthorized' }, 401);
 
