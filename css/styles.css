@@ -191,8 +191,55 @@ html, body {
   line-height: 18px;
 }
 
-.group-item.child {
-  padding-left: 36px;
+.group-item.depth-1 {
+  padding-left: 32px;
+}
+.group-item.depth-2 {
+  padding-left: 48px;
+}
+.group-item.depth-3 {
+  padding-left: 64px;
+}
+.group-item.depth-4 {
+  padding-left: 80px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+.section-header:hover {
+  color: var(--text-secondary);
+}
+.section-header .section-chevron {
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  transition: transform 0.15s;
+}
+.section-header .section-chevron.open {
+  transform: rotate(90deg);
+}
+.section-header .section-add {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 16px;
+  line-height: 1;
+}
+.section-header .section-add:hover {
+  color: var(--accent);
 }
 
 .group-item.drop-target {

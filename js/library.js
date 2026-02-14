@@ -7,6 +7,7 @@ let activeGroupId = null;
 let activeFilter = null;  // 'all', 'recent', 'favorites', 'trash'
 let treeEl = null;
 let pendingRenameId = null;
+let allGroups = [];
 
 export function getActiveGroupId() {
   return activeGroupId;
@@ -37,7 +38,7 @@ export function initLibrary() {
 
   // New group button
   document.getElementById('new-group-btn')?.addEventListener('click', async () => {
-    const group = await createGroup('New Group');
+    const group = await createGroup('New Group', null, 'notes');
     pendingRenameId = group.id;
     bus.emit('group:created', group);
   });
@@ -112,8 +113,9 @@ export function initLibrary() {
 export async function renderGroups(groups) {
   if (!treeEl) return;
   treeEl.innerHTML = '';
+  allGroups = groups;
 
-  // Fetch filter counts in one API call
+  // Fetch filter counts
   const counts = await getFilterCounts();
 
   // Smart filters section
@@ -143,35 +145,45 @@ export async function renderGroups(groups) {
   }
   treeEl.appendChild(filtersSection);
 
-  // Divider
-  treeEl.appendChild(el('div', { class: 'library-divider' }));
+  // --- Sections ---
+  const sections = ['projects', 'notes'];
+  const sectionLabels = { projects: 'Projects', notes: 'Notes' };
 
-  // Groups section
-  const topLevel = groups.filter(g => g.parentId == null);
-  const children = groups.filter(g => g.parentId != null);
-  console.log('[renderGroups] topLevel:', topLevel.map(g => g.name), 'children:', children.map(g => g.name));
+  for (const sec of sections) {
+    const topLevel = groups.filter(g => g.parentId == null && (g.section === sec || (!g.section && sec === 'notes')));
+    
+    // Section header
+    const chevronSvg = '<svg class="section-chevron open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
+    const header = el('div', { class: 'section-header', dataset: { section: sec } }, [
+      el('span', { html: chevronSvg }),
+      el('span', { text: sectionLabels[sec] }),
+      el('button', { class: 'section-add', text: '+', title: 'New Group', onClick: async (e) => {
+        e.stopPropagation();
+        const group = await createGroup('New Group', null, sec);
+        pendingRenameId = group.id;
+        bus.emit('group:created', group);
+      }}),
+    ]);
 
-  for (const group of topLevel) {
-    const kids = children.filter(c => c.parentId === group.id);
-    console.log(`[renderGroups] "${group.name}" (id:${group.id}) → ${kids.length} kids, collapsed:${group.collapsed}`);
-    const totalSheets = (group.sheetCount || 0) + kids.reduce((sum, k) => sum + (k.sheetCount || 0), 0);
-    treeEl.appendChild(createGroupItem(group, totalSheets, false, kids.length > 0));
+    const sectionContainer = el('div', { class: 'section-container', dataset: { section: sec } });
+    
+    header.addEventListener('click', () => {
+      const chevron = header.querySelector('.section-chevron');
+      const isOpen = chevron.classList.toggle('open');
+      sectionContainer.style.display = isOpen ? '' : 'none';
+    });
 
-    if (kids.length > 0) {
-      const childContainer = el('div', {
-        class: 'group-children',
-        dataset: { parent: group.id },
-      });
-      if (group.collapsed) childContainer.style.display = 'none';
-      for (const kid of kids) {
-        childContainer.appendChild(createGroupItem(kid, kid.sheetCount || 0, true, false));
-      }
-      treeEl.appendChild(childContainer);
-      console.log(`[renderGroups]   → childContainer appended, display:${childContainer.style.display}, children:${childContainer.childElementCount}`);
+    treeEl.appendChild(header);
+
+    // Render groups recursively
+    for (const group of topLevel) {
+      renderGroupRecursive(group, groups, sectionContainer, 0);
     }
+
+    treeEl.appendChild(sectionContainer);
   }
 
-  // Auto-start rename for newly created groups
+  // Auto-start rename
   if (pendingRenameId) {
     const id = pendingRenameId;
     pendingRenameId = null;
@@ -179,7 +191,36 @@ export async function renderGroups(groups) {
   }
 }
 
-function createGroupItem(group, count, isChild, hasKids) {
+function getRecursiveSheetCount(group, allGroups) {
+  let count = group.sheetCount || 0;
+  const kids = allGroups.filter(g => g.parentId === group.id);
+  for (const kid of kids) {
+    count += getRecursiveSheetCount(kid, allGroups);
+  }
+  return count;
+}
+
+function renderGroupRecursive(group, allGroups, container, depth) {
+  const kids = allGroups.filter(g => g.parentId === group.id);
+  const hasKids = kids.length > 0;
+  const totalSheets = getRecursiveSheetCount(group, allGroups);
+
+  container.appendChild(createGroupItem(group, totalSheets, depth, hasKids));
+
+  if (hasKids) {
+    const childContainer = el('div', {
+      class: 'group-children',
+      dataset: { parent: group.id },
+    });
+    if (group.collapsed) childContainer.style.display = 'none';
+    for (const kid of kids) {
+      renderGroupRecursive(kid, allGroups, childContainer, depth + 1);
+    }
+    container.appendChild(childContainer);
+  }
+}
+
+function createGroupItem(group, count, depth, hasKids) {
   // Build icon element
   let iconEl;
   if (group.icon) {
@@ -195,8 +236,8 @@ function createGroupItem(group, count, isChild, hasKids) {
 
   const children = [];
 
-  // Chevron or spacer (keeps alignment consistent)
-  if (!isChild) {
+  // Chevron or spacer
+  {
     if (hasKids) {
       const chevron = el('span', {
         class: `group-chevron${group.collapsed ? '' : ' open'}`,
@@ -222,7 +263,7 @@ function createGroupItem(group, count, isChild, hasKids) {
   children.push(el('span', { class: 'group-count', text: String(count) }));
 
   const item = el('div', {
-    class: `group-item${isChild ? ' child' : ''}${group.id === activeGroupId ? ' active' : ''}`,
+    class: `group-item depth-${depth}${group.id === activeGroupId ? ' active' : ''}`,
     dataset: { id: group.id },
     draggable: 'true',
   }, children);
@@ -273,7 +314,6 @@ function showContextMenu(x, y, groupId, isChild = false) {
     }}),
     el('div', { class: 'context-menu-item', text: 'New Group\u2026', onClick: async () => {
       closeMenu();
-      console.log('[library] Creating subgroup under parentId:', groupId);
       const group = await createGroup('New Group', groupId);
       console.log('[library] Created group:', JSON.stringify(group));
       pendingRenameId = group.id;

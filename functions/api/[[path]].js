@@ -81,7 +81,7 @@ export async function onRequest(context) {
     if (path === 'groups' && method === 'GET') {
       const { results } = await DB.prepare(
         `SELECT g.id, g.parentId as parentId, g.name, g.sortOrder, g.createdAt,
-                g.icon, g.iconColor, g.collapsed,
+                g.icon, g.iconColor, g.collapsed, g.section,
                 COALESCE(cnt, 0) as sheetCount
          FROM groups g
          LEFT JOIN (SELECT groupId, COUNT(*) as cnt FROM sheets WHERE isTrashed = 0 GROUP BY groupId) s
@@ -105,9 +105,10 @@ export async function onRequest(context) {
         const { results } = await DB.prepare('SELECT COUNT(*) as cnt FROM groups WHERE parentId IS NULL').all();
         sortOrder = results[0]?.cnt || 0;
       }
-      const group = { id: uid(), parentId: pid, name, sortOrder, createdAt: Date.now() };
-      await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
-        .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt).run();
+      const section = body.section || null;
+      const group = { id: uid(), parentId: pid, name, sortOrder, createdAt: Date.now(), section };
+      await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt, section) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt, group.section).run();
       return json(group);
     }
 
@@ -473,12 +474,15 @@ export async function onRequest(context) {
       try {
         await DB.prepare('ALTER TABLE groups ADD COLUMN collapsed INTEGER DEFAULT 0').run();
       } catch (e) { /* column already exists */ }
+      try {
+        await DB.prepare("ALTER TABLE groups ADD COLUMN section TEXT DEFAULT NULL").run();
+      } catch (e) { /* column already exists */ }
 
       const { results } = await DB.prepare('SELECT COUNT(*) as cnt FROM groups').all();
       if (results[0].cnt === 0) {
-        const group = { id: uid(), parentId: null, name: 'Inbox', sortOrder: 0, createdAt: Date.now() };
-        await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)')
-          .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt).run();
+        const group = { id: uid(), parentId: null, name: 'Inbox', sortOrder: 0, createdAt: Date.now(), section: 'notes' };
+        await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt, section) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(group.id, group.parentId, group.name, group.sortOrder, group.createdAt, group.section).run();
         return json({ created: true, group });
       }
       return json({ created: false });

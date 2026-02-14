@@ -62,8 +62,8 @@ export async function getGroup(id) {
   return groups.find(g => g.id === id) || null;
 }
 
-export async function createGroup(name, parentId = null) {
-  return api('/groups', { method: 'POST', body: { name, parentId } });
+export async function createGroup(name, parentId = null, section = null) {
+  return api('/groups', { method: 'POST', body: { name, parentId, section } });
 }
 
 export async function updateGroup(id, changes) {
