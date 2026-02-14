@@ -2053,11 +2053,16 @@ body {
     gap: 6px;
   }
 
-  /* Markup bar: flush with keyboard */
+  /* Markup bar: fixed at bottom */
   .markup-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
     height: 42px;
-    flex-shrink: 0;
-    z-index: 100;
+    z-index: 200;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
   }
   .markup-btn {
     width: 38px;
@@ -2090,26 +2095,6 @@ body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-  }
-}
-
-@media (max-width: 768px) {
-  #editor-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
-  }
-  .editor-toolbar {
-    flex-shrink: 0;
-  }
-  .editor-container {
-    flex: 1;
-    overflow-y: auto;
-    min-height: 0;
-    padding-bottom: 20px;
-  }
-  .markup-bar {
-    flex-shrink: 0;
+    padding-bottom: 50px;
   }
 }
