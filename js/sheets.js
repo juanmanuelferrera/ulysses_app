@@ -1,7 +1,7 @@
 // sheets.js — Sheet list panel with multi-select, favorites, trash, sorting
 import { bus, el, formatDate, wordCount, truncate, appConfirm, showUndoToast } from './utils.js';
 import { createSheet, trashSheet, trashSheets, restoreSheet, deleteSheet, getSheets, getFilteredSheets,
-         reorderSheets, moveSheet, moveSheets, toggleFavorite, emptyTrash, mergeSheets, undoMerge } from './db.js';
+         reorderSheets, moveSheet, moveSheets, toggleFavorite, emptyTrash, mergeSheets, undoMerge, getSheetTags } from './db.js';
 import { getActiveGroupId, getActiveFilter } from './library.js';
 
 let listEl = null;
@@ -196,6 +196,24 @@ export function initSheetList() {
     if (card) {
       const titleEl = card.querySelector('.sheet-card-title');
       if (titleEl) titleEl.textContent = title;
+    }
+  });
+
+  bus.on('sheet:tags-changed', async (sheetId) => {
+    const card = listEl.querySelector(`[data-id="${sheetId}"]`);
+    if (card) {
+      const oldTags = card.querySelector('.sheet-card-tags');
+      if (oldTags) oldTags.remove();
+      const tags = await getSheetTags(sheetId);
+      if (tags.length > 0) {
+        card.appendChild(el('div', { class: 'sheet-card-tags' },
+          tags.map(t => el('span', {
+            class: 'tag-pill',
+            text: t.name,
+            style: `background: ${t.color}`,
+          }))
+        ));
+      }
     }
   });
 
