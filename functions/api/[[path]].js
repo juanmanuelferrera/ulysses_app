@@ -110,6 +110,17 @@ export async function onRequest(context) {
       return json({ ok: true });
     }
 
+    if (segments[0] === 'admin' && segments[1] === 'users' && segments[2] && method === 'PUT') {
+      const targetId = segments[2];
+      const { password } = body;
+      if (!password) return json({ error: 'password required' }, 400);
+      const newHash = await hashPassword(password);
+      const { results: existing } = await DB.prepare('SELECT id FROM users WHERE passwordHash = ? AND id != ?').bind(newHash, targetId).all();
+      if (existing.length > 0) return json({ error: 'Password already in use' }, 400);
+      await DB.prepare('UPDATE users SET passwordHash = ? WHERE id = ?').bind(newHash, targetId).run();
+      return json({ ok: true });
+    }
+
     // --- Auth ---
     if (path === 'auth' && method === 'POST') {
       const inputHash = await hashPassword(body.token || '');
