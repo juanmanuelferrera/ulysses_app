@@ -154,7 +154,8 @@ export async function renderGroups(groups) {
   for (const group of topLevel) {
     const kids = children.filter(c => c.parentId === group.id);
     console.log(`[renderGroups] "${group.name}" (id:${group.id}) → ${kids.length} kids, collapsed:${group.collapsed}`);
-    treeEl.appendChild(createGroupItem(group, group.sheetCount || 0, false, kids.length > 0));
+    const totalSheets = (group.sheetCount || 0) + kids.reduce((sum, k) => sum + (k.sheetCount || 0), 0);
+    treeEl.appendChild(createGroupItem(group, totalSheets, false, kids.length > 0));
 
     if (kids.length > 0) {
       const childContainer = el('div', {
