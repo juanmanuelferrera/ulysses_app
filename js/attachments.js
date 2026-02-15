@@ -1,6 +1,7 @@
-// attachments.js — Sheet notes & image attachments panel (Ulysses-style)
+// attachments.js — Sheet notes, image attachments & keywords panel (Ulysses-style)
 import { bus, el } from './utils.js';
 import { getSheet, updateSheet } from './db.js';
+import { renderSheetKeywords } from './tags.js';
 
 let currentSheetId = null;
 let panelEl = null;
@@ -21,6 +22,10 @@ export function initAttachments() {
       </button>
     </div>
     <div class="attachments-content">
+      <div class="attach-section">
+        <label class="input-label">Keywords</label>
+        <div id="sheet-keywords"></div>
+      </div>
       <div class="attach-section">
         <label class="input-label">Notes</label>
         <textarea id="sheet-notes" class="input" rows="6" placeholder="Add notes about this sheet..."></textarea>
@@ -83,6 +88,7 @@ export function initAttachments() {
     currentSheetId = sheet.id;
     notesEl.value = sheet.notes || '';
     await renderImages();
+    // Keywords are rendered by tags.js via its own sheet:loaded listener
   });
 
   bus.on('sheet:none', () => {

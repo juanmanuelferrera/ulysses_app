@@ -63,12 +63,17 @@ export async function onRequest(context) {
     }
     userId = storedUserId;
 
-    // Check if admin
-    const { results: uRow } = await DB.prepare('SELECT passwordHash FROM users WHERE id = ?').bind(userId).all();
-    if (uRow.length > 0 && uRow[0].passwordHash === env.AUTH_TOKEN) isAdmin = true;
+    // Lightweight verify endpoint — just confirms session is valid
+    if (path === 'verify' && method === 'GET') {
+      return json({ ok: true, userId });
+    }
 
-    // Admin endpoints require admin
-    if (path.startsWith('admin') && !isAdmin) return json({ error: 'Forbidden' }, 403);
+    // Only check admin for admin endpoints
+    if (path.startsWith('admin')) {
+      const { results: uRow } = await DB.prepare('SELECT passwordHash FROM users WHERE id = ?').bind(userId).all();
+      if (uRow.length > 0 && uRow[0].passwordHash === env.AUTH_TOKEN) isAdmin = true;
+      if (!isAdmin) return json({ error: 'Forbidden' }, 403);
+    }
   }
 
   try {
@@ -166,6 +171,106 @@ export async function onRequest(context) {
       return json({ ok: false }, 401);
     }
 
+    // --- Bootstrap: single call returns groups + counts + first sheets + tags ---
+    if (path === 'bootstrap' && method === 'GET') {
+      const url = new URL(request.url);
+      const deepSheetId = url.searchParams.get('sheet');
+
+      // Run all queries in parallel
+      const [groupsR, countsR, tagsR] = await Promise.all([
+        DB.prepare(
+          `SELECT g.id, g.parentId as parentId, g.name, g.sortOrder, g.createdAt,
+                  g.icon, g.iconColor, g.collapsed, g.section,
+                  COALESCE(cnt, 0) as sheetCount
+           FROM groups g
+           LEFT JOIN (SELECT groupId, COUNT(*) as cnt FROM sheets WHERE isTrashed = 0 GROUP BY groupId) s
+           ON g.id = s.groupId WHERE g.userId = ? ORDER BY g.sortOrder`
+        ).bind(userId).all(),
+        DB.prepare(`SELECT
+          (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=0 AND g.userId=?) as all_count,
+          (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=0 AND s.createdAt>? AND g.userId=?) as recent,
+          (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=0 AND s.favorite=1 AND g.userId=?) as favorites,
+          (SELECT COUNT(*) FROM sheets s JOIN groups g ON s.groupId=g.id WHERE s.isTrashed=1 AND g.userId=?) as trash
+        `).bind(userId, Date.now() - 7*24*60*60*1000, userId, userId, userId).all(),
+        DB.prepare(
+          `SELECT t.*, COALESCE(c.cnt, 0) as sheetCount
+           FROM tags t
+           LEFT JOIN (SELECT st.tagId, COUNT(*) as cnt FROM sheet_tags st JOIN sheets s ON st.sheetId = s.id WHERE s.isTrashed = 0 GROUP BY st.tagId) c ON t.id = c.tagId
+           WHERE t.userId = ? ORDER BY sheetCount DESC, t.name ASC`
+        ).bind(userId).all(),
+      ]);
+
+      const groups = groupsR.results;
+      const c = countsR.results[0];
+      const counts = { all: c.all_count, recent: c.recent, favorites: c.favorites, trash: c.trash };
+      const tags = tagsR.results;
+
+      // Fetch ALL non-trashed sheets (one query, all groups) + their tags
+      const [allSheetsR, allSheetTagsR] = await Promise.all([
+        DB.prepare(
+          `SELECT sheets.*, groups.name AS groupName FROM sheets
+           LEFT JOIN groups ON sheets.groupId = groups.id
+           WHERE sheets.isTrashed = 0 AND groups.userId = ?
+           ORDER BY sheets.sortOrder ASC`
+        ).bind(userId).all(),
+        DB.prepare(
+          `SELECT st.sheetId, t.id, t.name, t.color FROM sheet_tags st
+           JOIN tags t ON st.tagId = t.id
+           JOIN sheets s ON st.sheetId = s.id
+           JOIN groups g ON s.groupId = g.id
+           WHERE s.isTrashed = 0 AND g.userId = ?`
+        ).bind(userId).all(),
+      ]);
+
+      const allSheets = allSheetsR.results;
+
+      // Attach tags to sheets
+      const tagMap = {};
+      for (const row of allSheetTagsR.results) {
+        (tagMap[row.sheetId] ||= []).push({ id: row.id, name: row.name, color: row.color });
+      }
+      for (const sheet of allSheets) {
+        sheet.tags = tagMap[sheet.id] || [];
+      }
+
+      // Group sheets by groupId for client-side caching
+      const sheetsByGroup = {};
+      for (const sheet of allSheets) {
+        (sheetsByGroup[sheet.groupId] ||= []).push(sheet);
+      }
+
+      // Determine first group's sheets (including subgroups)
+      let firstGroupId = null;
+      let firstGroupSheets = [];
+      if (deepSheetId) {
+        const ds = allSheets.find(s => s.id === deepSheetId);
+        if (ds) {
+          firstGroupId = ds.groupId;
+        }
+      }
+      if (!firstGroupId && groups.length > 0) {
+        firstGroupId = groups[0].id;
+      }
+
+      if (firstGroupId) {
+        // Collect firstGroup + descendant IDs from already-loaded groups
+        const childMap = {};
+        for (const g of groups) {
+          if (g.parentId) (childMap[g.parentId] ||= []).push(g.id);
+        }
+        const groupIds = new Set();
+        const stack = [firstGroupId];
+        while (stack.length > 0) {
+          const id = stack.pop();
+          groupIds.add(id);
+          if (childMap[id]) stack.push(...childMap[id]);
+        }
+        firstGroupSheets = allSheets.filter(s => groupIds.has(s.groupId));
+      }
+
+      return json({ groups, counts, tags, sheets: firstGroupSheets, sheetsByGroup, firstGroupId });
+    }
+
     // --- Groups ---
     if (path === 'groups' && method === 'GET') {
       const { results } = await DB.prepare(
@@ -252,10 +357,8 @@ export async function onRequest(context) {
         if (sort === 'date') orderBy = 'updatedAt DESC';
         if (sort === 'created') orderBy = 'createdAt DESC';
         if (sort === 'title') orderBy = 'title ASC';
-        const { results: gO } = await DB.prepare('SELECT id FROM groups WHERE id = ? AND userId = ?').bind(groupId, userId).all();
-        if (!gO.length) return json([]);
-        // Collect this group + all descendant group IDs
-        const allGroupIds = await getDescendantGroupIds(groupId, DB);
+        const allGroupIds = await getDescendantGroupIds(groupId, DB, userId);
+        if (!allGroupIds.length) return json([]);
         const ph = allGroupIds.map(() => '?').join(',');
         const r = await DB.prepare(`SELECT sheets.*, groups.name AS groupName FROM sheets LEFT JOIN groups ON sheets.groupId = groups.id WHERE sheets.groupId IN (${ph}) AND sheets.isTrashed = 0 ORDER BY sheets.${orderBy}`)
           .bind(...allGroupIds).all();
@@ -326,6 +429,27 @@ export async function onRequest(context) {
       }
       vals.push(id);
       await DB.prepare(`UPDATE sheets SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+
+      // Auto-write to R2 (fire and forget — don't block the response)
+      const BUCKET = env.BUCKET;
+      if (BUCKET && (changes.content !== undefined || changes.title !== undefined)) {
+        context.waitUntil((async () => {
+          try {
+            const sheet = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(id).all()).results[0];
+            if (!sheet || sheet.isTrashed) return;
+            const { pathMap } = await buildGroupPaths(DB, userId);
+            const groupPath = pathMap[sheet.groupId];
+            if (!groupPath) return;
+            const tags = (await DB.prepare('SELECT t.name FROM sheet_tags st JOIN tags t ON st.tagId = t.id WHERE st.sheetId = ?').bind(id).all()).results;
+            const goal = (await DB.prepare('SELECT * FROM goals WHERE sheetId = ?').bind(id).all()).results[0];
+            const filename = sanitizeFilename(sheet.title || 'Untitled') + '.md';
+            const key = userId + '/' + groupPath + '/' + filename;
+            const content = toFrontmatter(sheet, tags, goal);
+            await BUCKET.put(key, content, { customMetadata: { sheetId: sheet.id, modified: String(sheet.updatedAt) } });
+          } catch (e) { /* R2 write failed silently */ }
+        })());
+      }
+
       return json({ ok: true });
     }
 
@@ -422,7 +546,12 @@ export async function onRequest(context) {
 
     // --- Tags ---
     if (path === 'tags' && method === 'GET') {
-      const { results } = await DB.prepare('SELECT * FROM tags WHERE userId = ? ORDER BY name').bind(userId).all();
+      const { results } = await DB.prepare(
+        `SELECT t.*, COALESCE(c.cnt, 0) as sheetCount
+         FROM tags t
+         LEFT JOIN (SELECT st.tagId, COUNT(*) as cnt FROM sheet_tags st JOIN sheets s ON st.sheetId = s.id WHERE s.isTrashed = 0 GROUP BY st.tagId) c ON t.id = c.tagId
+         WHERE t.userId = ? ORDER BY sheetCount DESC, t.name ASC`
+      ).bind(userId).all();
       return json(results);
     }
 
@@ -517,6 +646,39 @@ export async function onRequest(context) {
       return json({ ok: true });
     }
 
+    // --- R2 Sync ---
+    if (segments[0] === 'r2') {
+      const BUCKET = env.BUCKET;
+      if (!BUCKET) return json({ error: 'R2 bucket not configured' }, 500);
+
+      // Status
+      if (segments[1] === 'status' && method === 'GET') {
+        const lastSync = (await DB.prepare("SELECT value FROM settings WHERE key = 'r2_last_sync'").all()).results[0]?.value || null;
+        return json({ enabled: true, lastSync });
+      }
+
+      // Push D1 → R2
+      if (segments[1] === 'push' && method === 'POST') {
+        const result = await r2Push(DB, BUCKET, userId);
+        await DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('r2_last_sync', ?)").bind(new Date().toISOString()).run();
+        return json(result);
+      }
+
+      // Pull R2 → D1
+      if (segments[1] === 'pull' && method === 'POST') {
+        const result = await r2Pull(DB, BUCKET, userId);
+        await DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('r2_last_sync', ?)").bind(new Date().toISOString()).run();
+        return json(result);
+      }
+
+      // Full bidirectional sync
+      if (segments[1] === 'sync' && method === 'POST') {
+        const result = await r2Sync(DB, BUCKET, userId);
+        await DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('r2_last_sync', ?)").bind(new Date().toISOString()).run();
+        return json(result);
+      }
+    }
+
     // --- Backup ---
     if (path === 'backup' && method === 'GET') {
       const groups = (await DB.prepare('SELECT * FROM groups WHERE userId = ? ORDER BY sortOrder').bind(userId).all()).results;
@@ -569,22 +731,21 @@ export async function onRequest(context) {
 
     // --- Init (create default Inbox if empty + migrate schema) ---
     if (path === 'init' && method === 'POST') {
-      // Schema migrations: add icon columns if missing
-      try {
-        await DB.prepare('ALTER TABLE groups ADD COLUMN icon TEXT DEFAULT NULL').run();
-      } catch (e) { /* column already exists */ }
-      try {
-        await DB.prepare('ALTER TABLE groups ADD COLUMN iconColor TEXT DEFAULT NULL').run();
-      } catch (e) { /* column already exists */ }
-      try {
-        await DB.prepare('ALTER TABLE groups ADD COLUMN collapsed INTEGER DEFAULT 0').run();
-      } catch (e) { /* column already exists */ }
-      try {
-        await DB.prepare("ALTER TABLE groups ADD COLUMN section TEXT DEFAULT NULL").run();
-      } catch (e) { /* column already exists */ }
-      try {
-        await DB.prepare("ALTER TABLE groups ADD COLUMN section TEXT DEFAULT NULL").run();
-      } catch (e) { /* column already exists */ }
+      // Check if migrations already ran (use a settings flag)
+      const { results: mig } = await DB.prepare("SELECT value FROM settings WHERE key = 'migrations_v2'").all();
+      if (!mig.length) {
+        // Schema migrations: add columns if missing
+        const alters = [
+          'ALTER TABLE groups ADD COLUMN icon TEXT DEFAULT NULL',
+          'ALTER TABLE groups ADD COLUMN iconColor TEXT DEFAULT NULL',
+          'ALTER TABLE groups ADD COLUMN collapsed INTEGER DEFAULT 0',
+          'ALTER TABLE groups ADD COLUMN section TEXT DEFAULT NULL',
+        ];
+        for (const sql of alters) {
+          try { await DB.prepare(sql).run(); } catch (e) { /* already exists */ }
+        }
+        await DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('migrations_v2', '1')").run();
+      }
 
       const { results } = await DB.prepare('SELECT COUNT(*) as cnt FROM groups').all();
       if (results[0].cnt === 0) {
@@ -602,13 +763,27 @@ export async function onRequest(context) {
   }
 }
 
-// Get group + all descendant group IDs recursively
-async function getDescendantGroupIds(groupId, DB) {
-  const ids = [groupId];
-  const { results: children } = await DB.prepare('SELECT id FROM groups WHERE parentId = ?').bind(groupId).all();
-  for (const child of children) {
-    const childIds = await getDescendantGroupIds(child.id, DB);
-    ids.push(...childIds);
+// Get group + all descendant group IDs (single query, in-memory traversal)
+async function getDescendantGroupIds(groupId, DB, userId) {
+  const query = userId
+    ? DB.prepare('SELECT id, parentId FROM groups WHERE userId = ?').bind(userId)
+    : DB.prepare('SELECT id, parentId FROM groups');
+  const { results: allGroups } = await query.all();
+  const childMap = {};
+  const allIds = new Set(allGroups.map(g => g.id));
+  for (const g of allGroups) {
+    if (g.parentId) {
+      (childMap[g.parentId] ||= []).push(g.id);
+    }
+  }
+  // Verify root group belongs to this user
+  if (!allIds.has(groupId)) return [];
+  const ids = [];
+  const stack = [groupId];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    ids.push(id);
+    if (childMap[id]) stack.push(...childMap[id]);
   }
   return ids;
 }
@@ -663,4 +838,405 @@ async function getFilteredSheets(filter, DB, userId) {
       results = [];
   }
   return results;
+}
+
+// ==================== R2 Sync Helpers ====================
+
+function sanitizeFilename(name) {
+  return (name || 'Untitled').replace(/[\/\\:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+function toFrontmatter(sheet, tags, goal) {
+  const lines = ['---'];
+  lines.push(`id: ${sheet.id}`);
+  if (tags && tags.length > 0) {
+    lines.push('tags:');
+    for (const t of tags) lines.push(`  - ${t.name}`);
+  }
+  if (sheet.favorite) lines.push('favorite: true');
+  if (sheet.notes) lines.push(`notes: ${JSON.stringify(sheet.notes)}`);
+  lines.push(`created: ${new Date(sheet.createdAt).toISOString()}`);
+  lines.push(`modified: ${new Date(sheet.updatedAt).toISOString()}`);
+  if (goal) {
+    lines.push('goal:');
+    lines.push(`  type: ${goal.targetType}`);
+    lines.push(`  target: ${goal.targetValue}`);
+    lines.push(`  mode: ${goal.mode || 'about'}`);
+    if (goal.deadline) lines.push(`  deadline: ${goal.deadline}`);
+  }
+  lines.push('---');
+  lines.push('');
+  return lines.join('\n') + (sheet.content || '');
+}
+
+function parseFrontmatter(text) {
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, content: text };
+  const meta = {};
+  const yamlLines = match[1].split('\n');
+  let currentKey = null;
+  let currentObj = null;
+  const tags = [];
+
+  for (const line of yamlLines) {
+    if (line.startsWith('  - ') && currentKey === 'tags') {
+      tags.push(line.slice(4).trim());
+    } else if (line.startsWith('  ') && currentObj) {
+      const [k, ...v] = line.trim().split(': ');
+      currentObj[k] = v.join(': ');
+    } else {
+      const colonIdx = line.indexOf(': ');
+      if (colonIdx > 0) {
+        const key = line.slice(0, colonIdx).trim();
+        const val = line.slice(colonIdx + 2).trim();
+        if (key === 'tags') {
+          currentKey = 'tags';
+          currentObj = null;
+        } else if (key === 'goal') {
+          currentObj = {};
+          meta.goal = currentObj;
+          currentKey = 'goal';
+        } else {
+          currentKey = key;
+          currentObj = null;
+          // Parse value
+          if (val === 'true') meta[key] = true;
+          else if (val === 'false') meta[key] = false;
+          else if (val.startsWith('"') && val.endsWith('"')) meta[key] = JSON.parse(val);
+          else meta[key] = val;
+        }
+      }
+    }
+  }
+  if (tags.length > 0) meta.tags = tags;
+  return { meta, content: match[2] };
+}
+
+async function buildGroupPaths(DB, userId) {
+  const groups = (await DB.prepare('SELECT * FROM groups WHERE userId = ? ORDER BY sortOrder').bind(userId).all()).results;
+  const pathMap = {}; // groupId → "Projects/Group A/Sub"
+  const idMap = {};   // "Projects/Group A/Sub" → groupId
+
+  for (const g of groups) {
+    const parts = [];
+    let cur = g;
+    while (cur) {
+      parts.unshift(sanitizeFilename(cur.name));
+      cur = groups.find(p => p.id === cur.parentId);
+    }
+    // Prepend section
+    const section = g.section === 'projects' ? 'Projects' : 'Notes';
+    // Find root group to determine section
+    let root = g;
+    while (root.parentId) root = groups.find(p => p.id === root.parentId) || root;
+    const rootSection = root.section === 'projects' ? 'Projects' : 'Notes';
+    const fullPath = rootSection + '/' + parts.join('/');
+    pathMap[g.id] = fullPath;
+    idMap[fullPath] = g.id;
+  }
+  return { pathMap, idMap, groups };
+}
+
+async function r2Push(DB, BUCKET, userId) {
+  const { pathMap } = await buildGroupPaths(DB, userId);
+  const groups = (await DB.prepare('SELECT id FROM groups WHERE userId = ?').bind(userId).all()).results;
+  const gIds = groups.map(g => g.id);
+  if (gIds.length === 0) return { pushed: 0 };
+
+  const gPH = gIds.map(() => '?').join(',');
+  const sheets = (await DB.prepare(`SELECT * FROM sheets WHERE groupId IN (${gPH}) AND isTrashed = 0`).bind(...gIds).all()).results;
+  const allSheetTags = (await DB.prepare(`SELECT st.sheetId, t.name FROM sheet_tags st JOIN tags t ON st.tagId = t.id WHERE st.sheetId IN (${sheets.length ? sheets.map(() => '?').join(',') : "'_'"})`).bind(...sheets.map(s => s.id)).all()).results;
+  const allGoals = (await DB.prepare(`SELECT * FROM goals WHERE sheetId IN (${sheets.length ? sheets.map(() => '?').join(',') : "'_'"})`).bind(...sheets.map(s => s.id)).all()).results;
+
+  // Build tag/goal maps
+  const tagMap = {};
+  for (const st of allSheetTags) {
+    (tagMap[st.sheetId] ||= []).push({ name: st.name });
+  }
+  const goalMap = {};
+  for (const g of allGoals) goalMap[g.sheetId] = g;
+
+  // Track used keys to delete stale files
+  const usedKeys = new Set();
+  let pushed = 0;
+
+  const prefix = userId + '/';
+  for (const sheet of sheets) {
+    const groupPath = pathMap[sheet.groupId];
+    if (!groupPath) continue;
+    const filename = sanitizeFilename(sheet.title || 'Untitled') + '.md';
+    const key = prefix + groupPath + '/' + filename;
+    usedKeys.add(key);
+
+    const content = toFrontmatter(sheet, tagMap[sheet.sheetId] || [], goalMap[sheet.sheetId]);
+    await BUCKET.put(key, content, {
+      customMetadata: { sheetId: sheet.id, modified: String(sheet.updatedAt) },
+    });
+    pushed++;
+  }
+
+  // Delete R2 files that no longer have a matching sheet (only this user's files)
+  const listed = await listAllR2Objects(BUCKET, prefix);
+  for (const obj of listed) {
+    if (obj.key.endsWith('.md') && !usedKeys.has(obj.key)) {
+      await BUCKET.delete(obj.key);
+    }
+  }
+
+  return { pushed, deleted: listed.filter(o => o.key.endsWith('.md') && !usedKeys.has(o.key)).length };
+}
+
+async function r2Pull(DB, BUCKET, userId) {
+  const { pathMap, idMap, groups } = await buildGroupPaths(DB, userId);
+  const prefix = userId + '/';
+  const listed = await listAllR2Objects(BUCKET, prefix);
+  let pulled = 0;
+  let created = 0;
+
+  for (const obj of listed) {
+    if (!obj.key.endsWith('.md')) continue;
+
+    const objData = await BUCKET.get(obj.key);
+    if (!objData) continue;
+    const text = await objData.text();
+    const { meta, content } = parseFrontmatter(text);
+
+    // Find which group this belongs to (strip userId prefix from path)
+    const relKey = obj.key.startsWith(prefix) ? obj.key.slice(prefix.length) : obj.key;
+    const parts = relKey.split('/');
+    const dirPath = parts.slice(0, -1).join('/');
+    let groupId = idMap[dirPath];
+
+    // If group doesn't exist, create it
+    if (!groupId && dirPath) {
+      groupId = await ensureGroupPath(DB, dirPath, userId, groups, idMap);
+    }
+    if (!groupId) continue;
+
+    const now = Date.now();
+    const modifiedTs = meta.modified ? new Date(meta.modified).getTime() : now;
+    const createdTs = meta.created ? new Date(meta.created).getTime() : now;
+
+    if (meta.id) {
+      // Update existing sheet
+      const existing = (await DB.prepare('SELECT id FROM sheets WHERE id = ?').bind(meta.id).all()).results;
+      if (existing.length > 0) {
+        const title = extractTitleFromContent(content);
+        await DB.prepare('UPDATE sheets SET content = ?, title = ?, notes = ?, favorite = ?, updatedAt = ? WHERE id = ?')
+          .bind(content, title, meta.notes || '', meta.favorite ? 1 : 0, modifiedTs, meta.id).run();
+        pulled++;
+      } else {
+        // Sheet with this ID was deleted from D1 but exists in R2 — recreate
+        const title = extractTitleFromContent(content);
+        await DB.prepare('INSERT INTO sheets (id, groupId, title, content, notes, images, sortOrder, favorite, isTrashed, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)')
+          .bind(meta.id, groupId, title, content, meta.notes || '', '[]', 0, meta.favorite ? 1 : 0, createdTs, modifiedTs).run();
+        created++;
+      }
+    } else {
+      // New file without ID — create new sheet
+      const id = crypto.randomUUID();
+      const title = extractTitleFromContent(content);
+      await DB.prepare('INSERT INTO sheets (id, groupId, title, content, notes, images, sortOrder, favorite, isTrashed, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)')
+        .bind(id, groupId, title, content, '', '[]', 0, now, now).run();
+      // Re-upload with the ID in frontmatter
+      const newMeta = { ...meta, id };
+      const newText = toFrontmatter({ id, content, favorite: 0, notes: '', createdAt: now, updatedAt: now }, [], null);
+      await BUCKET.put(obj.key, newText, { customMetadata: { sheetId: id, modified: String(now) } });
+      created++;
+    }
+
+    // Sync tags if present
+    if (meta.tags && meta.id) {
+      await syncTagsFromR2(DB, meta.id, meta.tags, userId);
+    }
+  }
+
+  return { pulled, created };
+}
+
+async function r2Sync(DB, BUCKET, userId) {
+  const { pathMap, idMap, groups } = await buildGroupPaths(DB, userId);
+
+  // 1. Get all D1 sheets
+  const allGroups = (await DB.prepare('SELECT id FROM groups WHERE userId = ?').bind(userId).all()).results;
+  const gIds = allGroups.map(g => g.id);
+  if (gIds.length === 0) return { pushed: 0, pulled: 0, created: 0 };
+
+  const gPH = gIds.map(() => '?').join(',');
+  const sheets = (await DB.prepare(`SELECT * FROM sheets WHERE groupId IN (${gPH}) AND isTrashed = 0`).bind(...gIds).all()).results;
+  const sheetMap = {};
+  for (const s of sheets) sheetMap[s.id] = s;
+
+  // Fetch tags and goals for all sheets
+  const sIds = sheets.map(s => s.id);
+  const sPH = sIds.length ? sIds.map(() => '?').join(',') : "'_'";
+  const allSheetTags = sIds.length ? (await DB.prepare(`SELECT st.sheetId, t.name FROM sheet_tags st JOIN tags t ON st.tagId = t.id WHERE st.sheetId IN (${sPH})`).bind(...sIds).all()).results : [];
+  const allGoals = sIds.length ? (await DB.prepare(`SELECT * FROM goals WHERE sheetId IN (${sPH})`).bind(...sIds).all()).results : [];
+  const tagMap = {};
+  for (const st of allSheetTags) (tagMap[st.sheetId] ||= []).push({ name: st.name });
+  const goalMap = {};
+  for (const g of allGoals) goalMap[g.sheetId] = g;
+
+  // 2. Get all R2 objects (scoped to this user)
+  const prefix = userId + '/';
+  const listed = await listAllR2Objects(BUCKET, prefix);
+  const r2Map = {}; // sheetId → { key, modified }
+  const r2Content = {}; // key → text (fetched on demand)
+
+  for (const obj of listed) {
+    if (!obj.key.endsWith('.md')) continue;
+    const sheetId = obj.customMetadata?.sheetId;
+    if (sheetId) {
+      r2Map[sheetId] = { key: obj.key, modified: parseInt(obj.customMetadata?.modified) || obj.uploaded?.getTime() || 0 };
+    }
+  }
+
+  let pushed = 0, pulled = 0, created = 0;
+  const processedR2Keys = new Set();
+
+  // 3. For each D1 sheet, compare with R2
+  for (const sheet of sheets) {
+    const groupPath = pathMap[sheet.groupId];
+    if (!groupPath) continue;
+    const filename = sanitizeFilename(sheet.title || 'Untitled') + '.md';
+    const expectedKey = prefix + groupPath + '/' + filename;
+
+    const r2Info = r2Map[sheet.id];
+
+    if (r2Info) {
+      processedR2Keys.add(r2Info.key);
+      if (sheet.updatedAt > r2Info.modified) {
+        // D1 is newer → push to R2
+        const content = toFrontmatter(sheet, tagMap[sheet.id] || [], goalMap[sheet.id]);
+        // If key changed (title rename), delete old and create new
+        if (r2Info.key !== expectedKey) await BUCKET.delete(r2Info.key);
+        await BUCKET.put(expectedKey, content, { customMetadata: { sheetId: sheet.id, modified: String(sheet.updatedAt) } });
+        pushed++;
+      } else if (r2Info.modified > sheet.updatedAt) {
+        // R2 is newer → pull to D1
+        const objData = await BUCKET.get(r2Info.key);
+        if (objData) {
+          const text = await objData.text();
+          const { meta, content } = parseFrontmatter(text);
+          const title = extractTitleFromContent(content);
+          const modTs = meta.modified ? new Date(meta.modified).getTime() : r2Info.modified;
+          await DB.prepare('UPDATE sheets SET content = ?, title = ?, notes = ?, favorite = ?, updatedAt = ? WHERE id = ?')
+            .bind(content, title, meta.notes || '', meta.favorite ? 1 : 0, modTs, sheet.id).run();
+          if (meta.tags) await syncTagsFromR2(DB, sheet.id, meta.tags, userId);
+          pulled++;
+        }
+      }
+      // else: same timestamp, skip
+    } else {
+      // Only in D1 → push to R2
+      const content = toFrontmatter(sheet, tagMap[sheet.id] || [], goalMap[sheet.id]);
+      await BUCKET.put(expectedKey, content, { customMetadata: { sheetId: sheet.id, modified: String(sheet.updatedAt) } });
+      pushed++;
+    }
+  }
+
+  // 4. R2 files not in D1 → pull as new sheets
+  for (const obj of listed) {
+    if (!obj.key.endsWith('.md')) continue;
+    if (processedR2Keys.has(obj.key)) continue;
+    const sheetId = obj.customMetadata?.sheetId;
+    if (sheetId && sheetMap[sheetId]) continue; // already processed
+
+    const objData = await BUCKET.get(obj.key);
+    if (!objData) continue;
+    const text = await objData.text();
+    const { meta, content } = parseFrontmatter(text);
+
+    // Strip userId prefix to get clean group path
+    const strippedKey = obj.key.startsWith(prefix) ? obj.key.slice(prefix.length) : obj.key;
+    const parts = strippedKey.split('/');
+    const dirPath = parts.slice(0, -1).join('/');
+    let groupId = idMap[dirPath];
+    if (!groupId && dirPath) groupId = await ensureGroupPath(DB, dirPath, userId, groups, idMap);
+    if (!groupId) continue;
+
+    const now = Date.now();
+    const id = meta.id || crypto.randomUUID();
+    const title = extractTitleFromContent(content);
+    const modTs = meta.modified ? new Date(meta.modified).getTime() : now;
+    const creTs = meta.created ? new Date(meta.created).getTime() : now;
+
+    await DB.prepare('INSERT OR IGNORE INTO sheets (id, groupId, title, content, notes, images, sortOrder, favorite, isTrashed, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)')
+      .bind(id, groupId, title, content, meta.notes || '', '[]', meta.favorite ? 1 : 0, creTs, modTs).run();
+
+    // Update R2 with ID if it was missing
+    if (!meta.id) {
+      const newContent = toFrontmatter({ id, content, favorite: meta.favorite ? 1 : 0, notes: meta.notes || '', createdAt: creTs, updatedAt: modTs }, [], null);
+      await BUCKET.put(obj.key, newContent, { customMetadata: { sheetId: id, modified: String(modTs) } });
+    }
+    if (meta.tags) await syncTagsFromR2(DB, id, meta.tags, userId);
+    created++;
+  }
+
+  return { pushed, pulled, created };
+}
+
+/** List all R2 objects (handles pagination, optional prefix for user isolation) */
+async function listAllR2Objects(BUCKET, prefix) {
+  const objects = [];
+  let cursor = undefined;
+  do {
+    const opts = { cursor, include: ['customMetadata'] };
+    if (prefix) opts.prefix = prefix;
+    const batch = await BUCKET.list(opts);
+    objects.push(...batch.objects);
+    cursor = batch.truncated ? batch.cursor : undefined;
+  } while (cursor);
+  return objects;
+}
+
+/** Ensure group path exists, creating groups as needed */
+async function ensureGroupPath(DB, dirPath, userId, groups, idMap) {
+  if (idMap[dirPath]) return idMap[dirPath];
+
+  const parts = dirPath.split('/');
+  const section = parts[0] === 'Projects' ? 'projects' : 'notes';
+  let parentId = null;
+  let currentPath = parts[0]; // "Projects" or "Notes"
+
+  for (let i = 1; i < parts.length; i++) {
+    currentPath += '/' + parts[i];
+    if (idMap[currentPath]) {
+      parentId = idMap[currentPath];
+      continue;
+    }
+    const id = crypto.randomUUID();
+    await DB.prepare('INSERT INTO groups (id, parentId, name, sortOrder, createdAt, userId, section) VALUES (?, ?, ?, 0, ?, ?, ?)')
+      .bind(id, parentId, parts[i], Date.now(), userId, i === 1 ? section : null).run();
+    idMap[currentPath] = id;
+    groups.push({ id, parentId, name: parts[i], section: i === 1 ? section : null });
+    parentId = id;
+  }
+  return parentId;
+}
+
+/** Sync tags from R2 frontmatter to D1 */
+async function syncTagsFromR2(DB, sheetId, tagNames, userId) {
+  // Get existing tags
+  const existingTags = (await DB.prepare('SELECT t.id, t.name FROM sheet_tags st JOIN tags t ON st.tagId = t.id WHERE st.sheetId = ?').bind(sheetId).all()).results;
+  const existingNames = new Set(existingTags.map(t => t.name));
+  const allTags = (await DB.prepare('SELECT * FROM tags WHERE userId = ?').bind(userId).all()).results;
+
+  for (const name of tagNames) {
+    if (existingNames.has(name)) continue;
+    // Find or create tag
+    let tag = allTags.find(t => t.name === name);
+    if (!tag) {
+      const id = crypto.randomUUID();
+      await DB.prepare('INSERT INTO tags (id, name, color, userId) VALUES (?, ?, ?, ?)').bind(id, name, '#888', userId).run();
+      tag = { id, name, color: '#888' };
+      allTags.push(tag);
+    }
+    await DB.prepare('INSERT OR IGNORE INTO sheet_tags (id, sheetId, tagId) VALUES (?, ?, ?)').bind(crypto.randomUUID(), sheetId, tag.id).run();
+  }
+}
+
+function extractTitleFromContent(content) {
+  const firstLine = (content || '').split('\n')[0] || '';
+  return firstLine.replace(/^#+\s*/, '').trim() || 'Untitled';
 }

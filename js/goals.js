@@ -33,6 +33,7 @@ export function initGoals() {
     currentSheetId = sheet.id;
     currentGoal = await getGoal(sheet.id);
     currentStats = computeStats(sheet.content);
+    bus.emit('goal:updated', currentGoal);
     updateGoalDisplay();
   });
 
@@ -45,6 +46,7 @@ export function initGoals() {
     currentSheetId = null;
     currentGoal = null;
     currentStats = null;
+    bus.emit('goal:updated', null);
     clearGoalUI();
   });
 }
@@ -63,12 +65,12 @@ function getGoalStatus() {
   const mode = currentGoal.mode || 'about';
   const pct = target > 0 ? current / target : 0;
 
-  let color = 'var(--accent)'; // blue = in progress
+  let color = 'var(--success)'; // green = in progress
   let complete = false;
 
   if (mode === 'atLeast') {
     complete = current >= target;
-    color = complete ? 'var(--success)' : 'var(--accent)';
+    color = 'var(--success)'; // always green for "at least" — more is better
   } else if (mode === 'atMost') {
     complete = current <= target;
     color = current > target ? 'var(--danger)' : 'var(--success)';
@@ -76,8 +78,7 @@ function getGoalStatus() {
     const tolerance = target * 0.1;
     complete = Math.abs(current - target) <= tolerance;
     if (current > target + tolerance) color = 'var(--danger)';
-    else if (complete) color = 'var(--success)';
-    else color = 'var(--accent)';
+    else color = 'var(--success)';
   }
 
   return { current, target, pct: Math.min(pct, 1), color, complete, mode };
@@ -220,6 +221,7 @@ function showGoalModal() {
       currentGoal ? el('button', { class: 'btn btn-danger', text: 'Remove Goal', onClick: async () => {
         await removeGoal(currentSheetId);
         currentGoal = null;
+        bus.emit('goal:updated', null);
         clearGoalUI();
         overlay.remove();
       }}) : null,
@@ -232,6 +234,7 @@ function showGoalModal() {
         const deadline = deadlineInput.value || null;
         await setGoal(currentSheetId, type, val, deadline, mode);
         currentGoal = { targetType: type, targetValue: val, mode, deadline };
+        bus.emit('goal:updated', currentGoal);
         updateGoalDisplay();
         overlay.remove();
       }}),

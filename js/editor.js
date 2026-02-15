@@ -105,6 +105,14 @@ export function initEditor(container) {
       search({ top: true }),
       ulyssesTheme,
       keymap.of([
+        // Escape: if search panel open, close it; otherwise blur editor for arrow navigation
+        { key: 'Escape', run: (v) => {
+          const searchPanel = v.dom.querySelector('.cm-search');
+          if (searchPanel) return false; // let default handler close search
+          v.contentDOM.blur();
+          document.getElementById('app')?.focus();
+          return true;
+        }},
         ...defaultKeymap,
         ...historyKeymap,
         ...closeBracketsKeymap,

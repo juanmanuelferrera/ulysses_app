@@ -2,7 +2,7 @@
 import { bus, el, formatDate, wordCount, truncate, appConfirm, showUndoToast } from './utils.js';
 import { createSheet, trashSheet, trashSheets, restoreSheet, deleteSheet, getSheets, getFilteredSheets,
          reorderSheets, moveSheet, moveSheets, toggleFavorite, emptyTrash, mergeSheets, undoMerge, getSheetTags, getTags } from './db.js';
-import { getActiveGroupId, getActiveFilter } from './library.js';
+import { getActiveGroupId, getActiveFilter, adjustGroupCount, getSidebarGroupOrder } from './library.js';
 
 let listEl = null;
 let activeSheetId = null;
@@ -15,9 +15,64 @@ let tagFilterMode = 'or';
 let tagFilterVisible = false;
 let currentSheets = [];
 
+// --- Local sheets cache (keyed by groupId or filter) ---
+const sheetsCache = {};
+const cacheTimes = {};
+
+function cacheKey(groupId, filter) {
+  return filter ? `filter:${filter}` : `group:${groupId}`;
+}
+
+function getCached(groupId, filter) {
+  const key = cacheKey(groupId, filter);
+  return sheetsCache[key] || null;
+}
+
+function getCacheAge(groupId, filter) {
+  const key = cacheKey(groupId, filter);
+  return cacheTimes[key] ? Date.now() - cacheTimes[key] : Infinity;
+}
+
+export function setCache(groupId, filter, sheets) {
+  const key = cacheKey(groupId, filter);
+  sheetsCache[key] = sheets;
+  cacheTimes[key] = Date.now();
+}
+
+function invalidateCache(groupId) {
+  // Clear specific group or all caches
+  if (groupId) {
+    delete sheetsCache[`group:${groupId}`];
+  } else {
+    // Clear all filter caches (they may reference any group's sheets)
+    for (const key of Object.keys(sheetsCache)) {
+      if (key.startsWith('filter:')) delete sheetsCache[key];
+    }
+  }
+}
+
 export function setActiveSheet(id) {
   activeSheetId = id;
   updateSelectionUI();
+}
+
+// Return sheet data from in-memory list (avoids API call)
+export function getLocalSheet(id) {
+  return currentSheets.find(s => s.id === id) || null;
+}
+
+export function selectNextSheet() {
+  if (allSheetIds.length === 0) return;
+  const idx = allSheetIds.indexOf(activeSheetId);
+  const next = idx < allSheetIds.length - 1 ? idx + 1 : 0;
+  bus.emit('sheet:select', allSheetIds[next]);
+}
+
+export function selectPrevSheet() {
+  if (allSheetIds.length === 0) return;
+  const idx = allSheetIds.indexOf(activeSheetId);
+  const prev = idx > 0 ? idx - 1 : allSheetIds.length - 1;
+  bus.emit('sheet:select', allSheetIds[prev]);
 }
 
 function updateSelectionUI() {
@@ -209,6 +264,12 @@ export function initSheetList() {
     }
   });
 
+  // Invalidate cache on mutations
+  bus.on('sheet:created', () => invalidateCache());
+  bus.on('sheet:deleted', () => invalidateCache());
+  bus.on('sheet:moved', () => invalidateCache());
+  bus.on('group:updated', () => invalidateCache());
+
   // Events
   bus.on('sheet:updated', ({ id, title }) => {
     const card = listEl.querySelector(`[data-id="${id}"]`);
@@ -282,7 +343,33 @@ export function initSheetList() {
     if (tagFilterVisible) renderTagFilterBar();
     const newBtn = document.getElementById('new-sheet-btn');
     if (newBtn) newBtn.style.display = '';
+
+    // Instant render from cache if available
+    const cached = getCached(groupId, null);
+    if (cached) {
+      renderSheets(cached);
+      if (currentSheets.length > 0) {
+        bus.emit('sheet:select', currentSheets[0].id);
+      } else {
+        bus.emit('sheet:none');
+      }
+      // Skip background refresh if cache is fresh (< 30s, e.g. just bootstrapped)
+      if (getCacheAge(groupId, null) > 30000) {
+        getSheets(groupId, currentSortBy).then(sheets => {
+          setCache(groupId, null, sheets);
+          const cachedIds = cached.map(s => `${s.id}:${s.updatedAt}`).join(',');
+          const freshIds = sheets.map(s => `${s.id}:${s.updatedAt}`).join(',');
+          if (cachedIds !== freshIds) {
+            renderSheets(sheets);
+          }
+        });
+      }
+      return;
+    }
+
+    // No cache — fetch and render
     const sheets = await getSheets(groupId, currentSortBy);
+    setCache(groupId, null, sheets);
     renderSheets(sheets);
     if (currentSheets.length > 0) {
       bus.emit('sheet:select', currentSheets[0].id);
@@ -302,10 +389,33 @@ export function initSheetList() {
       filter === 'recent' ? 'Last 7 Days' :
       filter === 'favorites' ? 'Favorites' :
       filter === 'trash' ? 'Trash' : '';
-    // Hide new sheet button in filters
     const newBtn = document.getElementById('new-sheet-btn');
     if (newBtn) newBtn.style.display = filter === 'trash' ? 'none' : '';
+
+    // Instant render from cache
+    const cached = getCached(null, filter);
+    if (cached) {
+      renderSheets(cached);
+      if (currentSheets.length > 0) {
+        bus.emit('sheet:select', currentSheets[0].id);
+      } else {
+        bus.emit('sheet:none');
+      }
+      // Refresh in background
+      getFilteredSheets(filter).then(sheets => {
+        setCache(null, filter, sheets);
+        const cachedIds = cached.map(s => `${s.id}:${s.updatedAt}`).join(',');
+        const freshIds = sheets.map(s => `${s.id}:${s.updatedAt}`).join(',');
+        if (cachedIds !== freshIds) {
+          renderSheets(sheets);
+        }
+      });
+      return;
+    }
+
+    // No cache — fetch and render
     const sheets = await getFilteredSheets(filter);
+    setCache(null, filter, sheets);
     renderSheets(sheets);
     if (sheets.length > 0) {
       bus.emit('sheet:select', sheets[0].id);
@@ -318,10 +428,14 @@ export function initSheetList() {
   bus.on('tag:reveal', async (tag) => {
     if (currentSortBy === 'manual') currentSortBy = 'date';
     activeTagFilters.clear();
-    document.getElementById('sheets-panel-title').textContent = 'Tag: ' + tag.name;
+    document.getElementById('sheets-panel-title').textContent = tag.name;
     const newBtn = document.getElementById('new-sheet-btn');
     if (newBtn) newBtn.style.display = 'none';
+    // Highlight the active keyword in the sidebar
     document.querySelectorAll('.group-item, .filter-item').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tag-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.tagId === tag.id);
+    });
     const sheets = await getFilteredSheets('tag:' + tag.id);
     renderSheets(sheets);
     if (sheets.length > 0) {
@@ -405,8 +519,9 @@ export function renderSheets(sheets) {
   }
 
   const isFilterView = !!getActiveFilter();
-  const groupByProject = isFilterView && currentSortBy === 'group';
-  const groupByDate = isFilterView && (currentSortBy === 'date' || currentSortBy === 'created');
+  const isAllView = getActiveFilter() === 'all';
+  const groupByProject = isFilterView && (currentSortBy === 'group' || isAllView);
+  const groupByDate = !isAllView && isFilterView && (currentSortBy === 'date' || currentSortBy === 'created');
 
   // Sort client-side for filter views
   if (isFilterView && currentSortBy === 'title') {
@@ -428,7 +543,16 @@ export function renderSheets(sheets) {
       groups.get(key).sheets.push(sheet);
     }
 
-    for (const [, group] of groups) {
+    // Sort groups to match sidebar order
+    const sidebarOrder = getSidebarGroupOrder();
+    const sortedGroupIds = [...groups.keys()].sort((a, b) => {
+      const ai = sidebarOrder.indexOf(a);
+      const bi = sidebarOrder.indexOf(b);
+      return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
+    });
+
+    for (const gid of sortedGroupIds) {
+      const group = groups.get(gid);
       const separator = el('div', { class: 'sheet-group-separator' }, [
         el('span', { class: 'sheet-group-separator-name', text: group.name }),
         el('span', { class: 'sheet-group-separator-count', text: String(group.sheets.length) }),
@@ -607,6 +731,8 @@ function showSheetContextMenu(x, y, sheetId) {
     el('div', { class: 'context-menu-divider' }),
     el('div', { class: 'context-menu-item danger', text: 'Move to Trash', onClick: async () => {
       closeMenu();
+      const groupId = getActiveGroupId();
+      if (groupId) adjustGroupCount(groupId, -1);
       await trashSheet(sheetId);
       if (activeSheetId === sheetId) {
         bus.emit('sheet:deleted', sheetId);
@@ -615,6 +741,7 @@ function showSheetContextMenu(x, y, sheetId) {
       bus.emit('group:updated');
       const undone = await showUndoToast('Sheet moved to trash');
       if (undone) {
+        if (groupId) adjustGroupCount(groupId, +1);
         await restoreSheet(sheetId);
         await refreshList();
         bus.emit('group:updated');
@@ -721,6 +848,9 @@ function showTrashContextMenu(x, y) {
 async function trashSelected() {
   const count = selectedIds.size;
   if (count === 0) return;
+
+  const groupId = getActiveGroupId();
+  if (groupId) adjustGroupCount(groupId, -count);
 
   const ids = [...selectedIds];
   await trashSheets(ids);

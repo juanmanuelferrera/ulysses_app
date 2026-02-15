@@ -45,7 +45,7 @@ export function isAuthenticated() {
 
 export async function verifyAuth() {
   try {
-    await api('/groups');
+    await api('/verify');
     return true;
   } catch {
     return false;
@@ -249,7 +249,18 @@ export async function importAllData(json) {
   return api('/backup', { method: 'POST', body: data });
 }
 
+// --- R2 Sync ---
+export async function r2Sync() { return api('/r2/sync', { method: 'POST' }); }
+export async function r2Push() { return api('/r2/push', { method: 'POST' }); }
+export async function r2Pull() { return api('/r2/pull', { method: 'POST' }); }
+
 // --- Init ---
 export async function initDB() {
   await api('/init', { method: 'POST' });
+}
+
+// --- Bootstrap: single call for all startup data ---
+export async function bootstrapData(deepSheetId = null) {
+  const params = deepSheetId ? `?sheet=${deepSheetId}` : '';
+  return api(`/bootstrap${params}`);
 }

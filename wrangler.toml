@@ -6,3 +6,7 @@ pages_build_output_dir = "."
 binding = "DB"
 database_name = "ulysses-db"
 database_id = "be4ddee5-430e-4bf8-a4e8-f732bd19e486"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "ulysses-sheets"

@@ -11,9 +11,17 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>Ulysses</title>
   <link rel="stylesheet" href="css/styles.css">
+  <!-- Preload CodeMirror modules so they download in parallel with app.js -->
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/view@6">
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/state@6">
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/commands@6">
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/lang-markdown@6">
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/language@6">
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/autocomplete@6">
+  <link rel="modulepreload" href="https://esm.sh/@codemirror/search@6">
 </head>
 <body>
-  <div id="app">
+  <div id="app" tabindex="-1">
     <!-- Library Panel -->
     <div id="library-panel">
       <div class="panel-header">
@@ -31,9 +39,9 @@
       <div class="library-scroll">
         <div class="library-tree" id="library-tree"></div>
         <div class="tags-section" id="tags-section">
-          <h3>Tags</h3>
+          <h3>Keywords</h3>
           <div class="tags-list" id="tags-list"></div>
-          <button class="btn" id="add-tag-btn" style="font-size: 11px; margin-top: 4px; width: 100%;">+ Add Tag</button>
+          <button class="btn" id="add-tag-btn" style="font-size: 11px; margin-top: 4px; width: 100%;">+ Add Keyword</button>
         </div>
       </div>
     </div>
@@ -94,9 +102,7 @@
             </svg>
           </button>
         </div>
-        <div class="editor-toolbar-center">
-          <span id="stats" style="cursor: pointer;" title="Click for full statistics">0 words  |  0 characters</span>
-        </div>
+        <div class="editor-toolbar-center"><div id="goal-status"></div></div>
         <div class="editor-toolbar-right">
           <button class="btn btn-icon" id="outline-btn" title="Outline">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -171,17 +177,76 @@
           </button>
         </div>
       </div>
-      <div class="editor-container" id="editor-container"></div>
+      <div class="editor-container" id="editor-container">
+        <div class="stats-float" id="stats-float">
+          <div class="stats-float-badge" id="stats-badge">0</div>
+          <div class="stats-float-popover" id="stats-popover">
+            <div class="stats-ring-section">
+              <svg class="stats-ring" viewBox="0 0 120 120">
+                <circle class="stats-ring-track" cx="60" cy="60" r="52" />
+                <circle class="stats-ring-progress" id="sp-ring" cx="60" cy="60" r="52" />
+              </svg>
+              <div class="stats-ring-label">
+                <span class="stats-ring-subtitle" id="sp-subtitle"></span>
+                <span class="stats-ring-count" id="sp-words">0</span>
+                <span class="stats-ring-unit">words</span>
+              </div>
+            </div>
+            <div class="stats-goal-label" id="sp-goal-label"></div>
+            <div class="stats-popover-divider"></div>
+            <div class="stats-detail-grid">
+              <div class="stats-detail-item">
+                <span class="stats-detail-value" id="sp-chars">0</span>
+                <span class="stats-detail-label">characters</span>
+              </div>
+              <div class="stats-detail-item">
+                <span class="stats-detail-value" id="sp-sentences">0</span>
+                <span class="stats-detail-label">sentences</span>
+              </div>
+              <div class="stats-detail-item">
+                <span class="stats-detail-value" id="sp-paragraphs">0</span>
+                <span class="stats-detail-label">paragraphs</span>
+              </div>
+              <div class="stats-detail-item">
+                <span class="stats-detail-value" id="sp-reading">0 min</span>
+                <span class="stats-detail-label">reading time</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
       <!-- Markup Bar: Ulysses-style formatting toolbar -->
       <div class="markup-bar" id="markup-bar">
         <div class="markup-bar-inner"></div>
-      </div>
-      <div class="status-bar">
-        <div class="status-bar-left">
-          <span id="status-group"></span>
-        </div>
-        <div class="status-bar-right">
-          <span id="goal-status"></span>
+        <div class="markup-stats" id="markup-stats">
+          <span id="markup-stats-label">0 words</span>
+          <div class="markup-stats-popover" id="markup-stats-popover">
+            <div class="stats-popover-row stats-popover-main">
+              <span class="stats-popover-value" id="msp-words">0</span>
+              <span class="stats-popover-label">words</span>
+            </div>
+            <div class="stats-popover-divider"></div>
+            <div class="stats-popover-row">
+              <span class="stats-popover-label">Characters</span>
+              <span class="stats-popover-value" id="msp-chars">0</span>
+            </div>
+            <div class="stats-popover-row">
+              <span class="stats-popover-label">Characters (no spaces)</span>
+              <span class="stats-popover-value" id="msp-chars-ns">0</span>
+            </div>
+            <div class="stats-popover-row">
+              <span class="stats-popover-label">Sentences</span>
+              <span class="stats-popover-value" id="msp-sentences">0</span>
+            </div>
+            <div class="stats-popover-row">
+              <span class="stats-popover-label">Paragraphs</span>
+              <span class="stats-popover-value" id="msp-paragraphs">0</span>
+            </div>
+            <div class="stats-popover-row">
+              <span class="stats-popover-label">Reading time</span>
+              <span class="stats-popover-value" id="msp-reading">0 min</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

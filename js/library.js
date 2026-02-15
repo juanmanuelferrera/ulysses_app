@@ -18,6 +18,23 @@ export function getActiveFilter() {
   return activeFilter;
 }
 
+// Optimistically update a group's sheet count in the DOM without API
+export function adjustGroupCount(groupId, delta) {
+  if (!treeEl) return;
+  const item = treeEl.querySelector(`.group-item[data-id="${groupId}"]`);
+  if (!item) return;
+  const countEl = item.querySelector('.group-count');
+  if (countEl) {
+    const cur = parseInt(countEl.textContent) || 0;
+    countEl.textContent = String(Math.max(0, cur + delta));
+  }
+  // Also update parent groups (they show recursive counts)
+  const group = allGroups.find(g => g.id === groupId);
+  if (group && group.parentId) {
+    adjustGroupCount(group.parentId, delta);
+  }
+}
+
 export function initLibrary() {
   treeEl = document.getElementById('library-tree');
 
@@ -27,6 +44,7 @@ export function initLibrary() {
     document.querySelectorAll('.group-item, .filter-item').forEach(el => {
       el.classList.toggle('active', el.dataset.id === groupId);
     });
+    document.querySelectorAll('.tag-item').forEach(el => el.classList.remove('active'));
   });
 
   bus.on('filter:select', (filter) => {
@@ -35,6 +53,13 @@ export function initLibrary() {
     document.querySelectorAll('.group-item, .filter-item').forEach(el => {
       el.classList.toggle('active', el.dataset.filter === filter);
     });
+    document.querySelectorAll('.tag-item').forEach(el => el.classList.remove('active'));
+  });
+
+  // When a keyword is revealed, clear group/filter state
+  bus.on('tag:reveal', () => {
+    activeGroupId = null;
+    activeFilter = null;
   });
 
   // Logout button in header
@@ -65,28 +90,70 @@ export function initLibrary() {
     }
   });
 
-  // Drag and drop
+  // Drag and drop — three zones: top edge (reorder above), center (nest), bottom edge (reorder below)
+  let dragDropZone = null; // 'above' | 'below' | 'nest'
+
+  function clearDropIndicators() {
+    treeEl.querySelectorAll('.group-item').forEach(el => {
+      el.classList.remove('drop-above', 'drop-below', 'drop-nest');
+    });
+    dragDropZone = null;
+  }
+
   treeEl.addEventListener('dragstart', (e) => {
     const item = e.target.closest('.group-item');
     if (!item) return;
+    item.classList.add('dragging');
     e.dataTransfer.setData('text/group-id', item.dataset.id);
     e.dataTransfer.effectAllowed = 'move';
+  });
+
+  treeEl.addEventListener('dragend', () => {
+    clearDropIndicators();
+    treeEl.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
   });
 
   treeEl.addEventListener('dragover', (e) => {
     e.preventDefault();
     const item = e.target.closest('.group-item');
-    if (item) item.classList.add('drop-target');
+    if (!item || item.classList.contains('dragging')) {
+      clearDropIndicators();
+      return;
+    }
+    // Determine zone: top 30% = above, bottom 30% = below, center = nest
+    const rect = item.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const pct = y / rect.height;
+
+    // Only for group-to-group drags (not sheet drags)
+    const isGroupDrag = e.dataTransfer.types.includes('text/group-id');
+
+    clearDropIndicators();
+    if (isGroupDrag && pct < 0.3) {
+      item.classList.add('drop-above');
+      dragDropZone = 'above';
+    } else if (isGroupDrag && pct > 0.7) {
+      item.classList.add('drop-below');
+      dragDropZone = 'below';
+    } else {
+      item.classList.add('drop-nest');
+      dragDropZone = 'nest';
+    }
   });
 
   treeEl.addEventListener('dragleave', (e) => {
     const item = e.target.closest('.group-item');
-    if (item) item.classList.remove('drop-target');
+    if (item) {
+      item.classList.remove('drop-above', 'drop-below', 'drop-nest');
+    }
   });
 
   treeEl.addEventListener('drop', async (e) => {
     e.preventDefault();
-    document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+    const zone = dragDropZone;
+    clearDropIndicators();
+    treeEl.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+
     const fromId = e.dataTransfer.getData('text/group-id');
     const sheetId = e.dataTransfer.getData('text/sheet-id');
     const sheetIdsJson = e.dataTransfer.getData('text/sheet-ids');
@@ -94,6 +161,8 @@ export function initLibrary() {
 
     if (toItem) {
       const toId = toItem.dataset.id;
+
+      // Sheet drops always nest (move sheet to group)
       if (sheetIdsJson) {
         const { moveSheets } = await import('./db.js');
         const ids = JSON.parse(sheetIdsJson);
@@ -104,8 +173,28 @@ export function initLibrary() {
         await moveSheet(sheetId, toId);
         bus.emit('sheet:moved');
       } else if (fromId && fromId !== toId) {
-        // Nest: set the dragged group as a child of the target group
-        await updateGroup(fromId, { parentId: toId });
+        if (zone === 'nest') {
+          // Nest inside target
+          await updateGroup(fromId, { parentId: toId });
+        } else {
+          // Reorder: place before or after target at same level
+          const targetGroup = allGroups.find(g => g.id === toId);
+          const fromGroup = allGroups.find(g => g.id === fromId);
+          if (targetGroup && fromGroup) {
+            // Move to same parent as target
+            const newParentId = targetGroup.parentId || null;
+            const siblings = allGroups
+              .filter(g => (g.parentId || null) === newParentId && g.id !== fromId)
+              .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+            const targetIdx = siblings.findIndex(g => g.id === toId);
+            const insertIdx = zone === 'above' ? targetIdx : targetIdx + 1;
+            const orderedIds = siblings.map(g => g.id);
+            orderedIds.splice(insertIdx, 0, fromId);
+            // Update parent + reorder
+            await updateGroup(fromId, { parentId: newParentId });
+            await reorderGroups(orderedIds);
+          }
+        }
         bus.emit('group:updated');
       }
     } else if (fromId) {
@@ -116,13 +205,13 @@ export function initLibrary() {
   });
 }
 
-export async function renderGroups(groups) {
+export async function renderGroups(groups, prefetchedCounts = null) {
   if (!treeEl) return;
   treeEl.innerHTML = '';
   allGroups = groups;
 
-  // Fetch filter counts
-  const counts = await getFilterCounts();
+  // Use prefetched counts or fetch them
+  const counts = prefetchedCounts || await getFilterCounts();
 
   // Smart filters section
   const filtersSection = el('div', { class: 'library-section' });
@@ -177,6 +266,15 @@ export async function renderGroups(groups) {
       const chevron = header.querySelector('.section-chevron');
       const isOpen = chevron.classList.toggle('open');
       sectionContainer.style.display = isOpen ? '' : 'none';
+      // When re-expanding, collapse all subgroups for a clean view
+      if (isOpen) {
+        sectionContainer.querySelectorAll('.group-children').forEach(c => {
+          c.style.display = 'none';
+        });
+        sectionContainer.querySelectorAll('.group-chevron').forEach(c => {
+          c.classList.remove('open');
+        });
+      }
     });
 
     treeEl.appendChild(header);
@@ -208,6 +306,30 @@ export async function renderGroups(groups) {
   }
 
 
+}
+
+/** Return group IDs in sidebar display order (projects then notes, depth-first by sortOrder) */
+export function getSidebarGroupOrder() {
+  const order = [];
+  function walk(parentId) {
+    const kids = allGroups
+      .filter(g => g.parentId === parentId)
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    for (const g of kids) {
+      order.push(g.id);
+      walk(g.id);
+    }
+  }
+  for (const sec of ['projects', 'notes']) {
+    const roots = allGroups
+      .filter(g => g.parentId == null && (g.section === sec || (!g.section && sec === 'notes')))
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    for (const r of roots) {
+      order.push(r.id);
+      walk(r.id);
+    }
+  }
+  return order;
 }
 
 function getRecursiveSheetCount(group, allGroups) {
