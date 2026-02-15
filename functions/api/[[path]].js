@@ -319,6 +319,24 @@ export async function onRequest(context) {
 
     if (segments[0] === 'groups' && segments[1] && method === 'PUT') {
       const id = segments[1];
+      // R2: if name is changing, capture old R2 keys before D1 update
+      let oldR2Keys = [];
+      let oldR2SheetIds = [];
+      if (env.BUCKET && body.name !== undefined) {
+        const allGids = await getDescendantGroupIds(id, DB, userId);
+        if (allGids.length) {
+          const ph = allGids.map(() => '?').join(',');
+          const sheets = (await DB.prepare(`SELECT * FROM sheets WHERE groupId IN (${ph}) AND isTrashed = 0`).bind(...allGids).all()).results;
+          const { pathMap } = await buildGroupPaths(DB, userId);
+          for (const s of sheets) {
+            const gp = pathMap[s.groupId];
+            if (gp) {
+              oldR2Keys.push(userId + '/' + gp + '/' + sanitizeFilename(s.title || 'Untitled') + '.md');
+              oldR2SheetIds.push(s.id);
+            }
+          }
+        }
+      }
       const sets = [];
       const vals = [];
       for (const [k, v] of Object.entries(body)) {
@@ -329,12 +347,43 @@ export async function onRequest(context) {
         vals.push(id); vals.push(userId);
         await DB.prepare(`UPDATE groups SET ${sets.join(', ')} WHERE id = ? AND userId = ?`).bind(...vals).run();
       }
+      // R2: move files to new paths (group name changed = different folder)
+      if (env.BUCKET && oldR2Keys.length > 0) {
+        context.waitUntil((async () => {
+          try {
+            // Delete old keys (computed before rename)
+            for (const key of oldR2Keys) {
+              try { await env.BUCKET.delete(key); } catch(e){}
+            }
+            // Write new keys (computed after rename, with new group path)
+            for (const sid of oldR2SheetIds) {
+              try {
+                const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(sid).all()).results[0];
+                if (s && !s.isTrashed) await r2WriteSheet(env.BUCKET, DB, userId, s);
+              } catch(e){}
+            }
+          } catch(e){}
+        })());
+      }
       return json({ ok: true });
     }
 
     if (segments[0] === 'groups' && segments[1] && method === 'DELETE') {
       const { results: gC } = await DB.prepare('SELECT id FROM groups WHERE id = ? AND userId = ?').bind(segments[1], userId).all();
       if (!gC.length) return json({ error: 'Not found' }, 404);
+      // R2-first: delete all .md files in this group tree before D1 delete
+      if (env.BUCKET) {
+        try {
+          const allGids = await getDescendantGroupIds(segments[1], DB, userId);
+          if (allGids.length) {
+            const ph = allGids.map(() => '?').join(',');
+            const sheets = (await DB.prepare(`SELECT * FROM sheets WHERE groupId IN (${ph}) AND isTrashed = 0`).bind(...allGids).all()).results;
+            for (const s of sheets) {
+              try { await r2DeleteSheet(env.BUCKET, DB, userId, s); } catch(e){}
+            }
+          }
+        } catch(e){}
+      }
       await deleteGroupRecursive(segments[1], DB);
       return json({ ok: true });
     }
@@ -426,11 +475,29 @@ export async function onRequest(context) {
       await DB.prepare(
         'INSERT INTO sheets (id, groupId, title, content, notes, images, sortOrder, favorite, isTrashed, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       ).bind(sheet.id, sheet.groupId, sheet.title, sheet.content, sheet.notes, sheet.images, sheet.sortOrder, sheet.favorite, sheet.isTrashed, sheet.createdAt, sheet.updatedAt).run();
+      // R2-first: write .md file
+      if (env.BUCKET) {
+        try {
+          const { pathMap } = await buildGroupPaths(DB, userId);
+          const gp = pathMap[sheet.groupId];
+          if (gp) {
+            const fn = sanitizeFilename(sheet.title || 'Untitled') + '.md';
+            await env.BUCKET.put(userId + '/' + gp + '/' + fn, toFrontmatter(sheet, [], null),
+              { customMetadata: { sheetId: sheet.id, modified: String(now) } });
+          }
+        } catch(e){}
+      }
       return json(sheet);
     }
 
     if (segments[0] === 'sheets' && segments[1] && !segments[2] && method === 'PUT') {
       const id = segments[1];
+      // R2: capture old title before update (needed to delete old .md if title changed)
+      let oldTitle = null;
+      if (env.BUCKET && body.title !== undefined) {
+        const old = (await DB.prepare('SELECT title, groupId FROM sheets WHERE id = ?').bind(id).all()).results[0];
+        if (old && old.title !== body.title) oldTitle = old.title;
+      }
       const changes = { ...body, updatedAt: Date.now() };
       const sets = [];
       const vals = [];
@@ -441,23 +508,18 @@ export async function onRequest(context) {
       vals.push(id);
       await DB.prepare(`UPDATE sheets SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
 
-      // Auto-write to R2 (fire and forget — don't block the response)
-      const BUCKET = env.BUCKET;
-      if (BUCKET && (changes.content !== undefined || changes.title !== undefined)) {
+      // R2-first: sync .md file on every save (non-blocking for typing speed)
+      if (env.BUCKET) {
         context.waitUntil((async () => {
           try {
             const sheet = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(id).all()).results[0];
             if (!sheet || sheet.isTrashed) return;
-            const { pathMap } = await buildGroupPaths(DB, userId);
-            const groupPath = pathMap[sheet.groupId];
-            if (!groupPath) return;
-            const tags = (await DB.prepare('SELECT t.name FROM sheet_tags st JOIN tags t ON st.tagId = t.id WHERE st.sheetId = ?').bind(id).all()).results;
-            const goal = (await DB.prepare('SELECT * FROM goals WHERE sheetId = ?').bind(id).all()).results[0];
-            const filename = sanitizeFilename(sheet.title || 'Untitled') + '.md';
-            const key = userId + '/' + groupPath + '/' + filename;
-            const content = toFrontmatter(sheet, tags, goal);
-            await BUCKET.put(key, content, { customMetadata: { sheetId: sheet.id, modified: String(sheet.updatedAt) } });
-          } catch (e) { /* R2 write failed silently */ }
+            // Delete old file if title changed (different filename)
+            if (oldTitle) {
+              try { await r2DeleteSheet(env.BUCKET, DB, userId, { ...sheet, title: oldTitle }); } catch(e){}
+            }
+            await r2WriteSheet(env.BUCKET, DB, userId, sheet);
+          } catch(e){}
         })());
       }
 
@@ -466,9 +528,15 @@ export async function onRequest(context) {
 
     if (segments[0] === 'sheets' && segments[1] && !segments[2] && method === 'DELETE') {
       const id = segments[1];
+      // R2-first: get sheet before deleting (need path info for R2 delete)
+      const delSheet = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(id).all()).results[0];
       await DB.prepare('DELETE FROM sheet_tags WHERE sheetId = ?').bind(id).run();
       await DB.prepare('DELETE FROM goals WHERE sheetId = ?').bind(id).run();
       await DB.prepare('DELETE FROM sheets WHERE id = ?').bind(id).run();
+      // R2: delete .md file
+      if (env.BUCKET && delSheet) {
+        try { await r2DeleteSheet(env.BUCKET, DB, userId, delSheet); } catch(e){}
+      }
       return json({ ok: true });
     }
 
@@ -477,8 +545,29 @@ export async function onRequest(context) {
       const { ids, restore } = body;
       const now = Date.now();
       const val = restore ? 0 : 1;
+      // R2: get sheets before trashing (need path info)
+      const sheetsForR2 = [];
+      if (env.BUCKET) {
+        for (const id of ids) {
+          const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(id).all()).results[0];
+          if (s) sheetsForR2.push(s);
+        }
+      }
       for (const id of ids) {
         await DB.prepare('UPDATE sheets SET isTrashed = ?, updatedAt = ? WHERE id = ?').bind(val, now, id).run();
+      }
+      // R2: delete on trash, recreate on restore
+      if (env.BUCKET) {
+        for (const s of sheetsForR2) {
+          try {
+            if (restore) {
+              s.isTrashed = 0; s.updatedAt = now;
+              await r2WriteSheet(env.BUCKET, DB, userId, s);
+            } else {
+              await r2DeleteSheet(env.BUCKET, DB, userId, s);
+            }
+          } catch(e){}
+        }
       }
       return json({ ok: true });
     }
@@ -490,6 +579,15 @@ export async function onRequest(context) {
       const current = results[0]?.favorite || 0;
       const newVal = current ? 0 : 1;
       await DB.prepare('UPDATE sheets SET favorite = ? WHERE id = ?').bind(newVal, id).run();
+      // R2: update frontmatter with new favorite status
+      if (env.BUCKET) {
+        context.waitUntil((async () => {
+          try {
+            const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(id).all()).results[0];
+            if (s && !s.isTrashed) await r2WriteSheet(env.BUCKET, DB, userId, s);
+          } catch(e){}
+        })());
+      }
       return json({ favorite: !!newVal });
     }
 
@@ -517,6 +615,13 @@ export async function onRequest(context) {
       for (const s of sheets) {
         await DB.prepare('UPDATE sheets SET isTrashed = 1, updatedAt = ? WHERE id = ?').bind(now, s.id).run();
       }
+      // R2: write merged sheet, delete originals
+      if (env.BUCKET) {
+        try { await r2WriteSheet(env.BUCKET, DB, userId, newSheet); } catch(e){}
+        for (const s of sheets) {
+          try { await r2DeleteSheet(env.BUCKET, DB, userId, s); } catch(e){}
+        }
+      }
       return json({ merged: newSheet, originals: sheets });
     }
 
@@ -532,12 +637,32 @@ export async function onRequest(context) {
     // Move sheets to another group
     if (segments[0] === 'sheets' && segments[1] === 'move' && method === 'POST') {
       const { ids, groupId } = body;
+      // R2: get sheets at old location before move
+      const oldSheets = [];
+      if (env.BUCKET) {
+        for (const id of ids) {
+          const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(id).all()).results[0];
+          if (s) oldSheets.push({ ...s });
+        }
+      }
       const { results: cntR } = await DB.prepare('SELECT COUNT(*) as cnt FROM sheets WHERE groupId = ?').bind(groupId).all();
       let order = cntR[0]?.cnt || 0;
       const now = Date.now();
       for (const id of ids) {
         await DB.prepare('UPDATE sheets SET groupId = ?, sortOrder = ?, updatedAt = ? WHERE id = ?')
           .bind(groupId, order++, now, id).run();
+      }
+      // R2: delete old files, write new ones at new path
+      if (env.BUCKET) {
+        for (const old of oldSheets) {
+          try { await r2DeleteSheet(env.BUCKET, DB, userId, old); } catch(e){}
+        }
+        for (const id of ids) {
+          try {
+            const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(id).all()).results[0];
+            if (s && !s.isTrashed) await r2WriteSheet(env.BUCKET, DB, userId, s);
+          } catch(e){}
+        }
       }
       return json({ ok: true });
     }
@@ -612,12 +737,30 @@ export async function onRequest(context) {
       } catch (e) {
         // Ignore duplicate
       }
+      // R2: update frontmatter with new tag
+      if (env.BUCKET) {
+        context.waitUntil((async () => {
+          try {
+            const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(sheetId).all()).results[0];
+            if (s && !s.isTrashed) await r2WriteSheet(env.BUCKET, DB, userId, s);
+          } catch(e){}
+        })());
+      }
       return json({ ok: true });
     }
 
     if (segments[0] === 'sheet-tags' && segments[1] && segments[2] && method === 'DELETE') {
       await DB.prepare('DELETE FROM sheet_tags WHERE sheetId = ? AND tagId = ?')
         .bind(segments[1], segments[2]).run();
+      // R2: update frontmatter without removed tag
+      if (env.BUCKET) {
+        context.waitUntil((async () => {
+          try {
+            const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(segments[1]).all()).results[0];
+            if (s && !s.isTrashed) await r2WriteSheet(env.BUCKET, DB, userId, s);
+          } catch(e){}
+        })());
+      }
       return json({ ok: true });
     }
 
@@ -638,11 +781,29 @@ export async function onRequest(context) {
         await DB.prepare('INSERT INTO goals (id, sheetId, targetType, targetValue, mode, deadline) VALUES (?, ?, ?, ?, ?, ?)')
           .bind(uid(), sheetId, targetType, targetValue, mode || 'about', deadline || null).run();
       }
+      // R2: update frontmatter with goal
+      if (env.BUCKET) {
+        context.waitUntil((async () => {
+          try {
+            const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(sheetId).all()).results[0];
+            if (s && !s.isTrashed) await r2WriteSheet(env.BUCKET, DB, userId, s);
+          } catch(e){}
+        })());
+      }
       return json({ ok: true });
     }
 
     if (segments[0] === 'goals' && segments[1] && method === 'DELETE') {
       await DB.prepare('DELETE FROM goals WHERE sheetId = ?').bind(segments[1]).run();
+      // R2: update frontmatter without goal
+      if (env.BUCKET) {
+        context.waitUntil((async () => {
+          try {
+            const s = (await DB.prepare('SELECT * FROM sheets WHERE id = ?').bind(segments[1]).all()).results[0];
+            if (s && !s.isTrashed) await r2WriteSheet(env.BUCKET, DB, userId, s);
+          } catch(e){}
+        })());
+      }
       return json({ ok: true });
     }
 
@@ -1250,4 +1411,31 @@ async function syncTagsFromR2(DB, sheetId, tagNames, userId) {
 function extractTitleFromContent(content) {
   const firstLine = (content || '').split('\n')[0] || '';
   return firstLine.replace(/^#+\s*/, '').trim() || 'Untitled';
+}
+
+// --- R2-first helpers: keep R2 in sync with every D1 mutation ---
+
+async function r2WriteSheet(BUCKET, DB, userId, sheet) {
+  if (!BUCKET || !sheet || sheet.isTrashed) return;
+  const { pathMap } = await buildGroupPaths(DB, userId);
+  const groupPath = pathMap[sheet.groupId];
+  if (!groupPath) return;
+  const tags = (await DB.prepare(
+    'SELECT t.name FROM sheet_tags st JOIN tags t ON st.tagId = t.id WHERE st.sheetId = ?'
+  ).bind(sheet.id).all()).results;
+  const goal = (await DB.prepare('SELECT * FROM goals WHERE sheetId = ?').bind(sheet.id).all()).results[0];
+  const filename = sanitizeFilename(sheet.title || 'Untitled') + '.md';
+  const key = userId + '/' + groupPath + '/' + filename;
+  const md = toFrontmatter(sheet, tags, goal);
+  await BUCKET.put(key, md, { customMetadata: { sheetId: sheet.id, modified: String(sheet.updatedAt) } });
+}
+
+async function r2DeleteSheet(BUCKET, DB, userId, sheet) {
+  if (!BUCKET || !sheet) return;
+  const { pathMap } = await buildGroupPaths(DB, userId);
+  const groupPath = pathMap[sheet.groupId];
+  if (!groupPath) return;
+  const filename = sanitizeFilename(sheet.title || 'Untitled') + '.md';
+  const key = userId + '/' + groupPath + '/' + filename;
+  await BUCKET.delete(key);
 }
