@@ -8,14 +8,10 @@ export async function initAuth() {
   // Listen for auth:required events (401 from API)
   bus.on('auth:required', showLogin);
 
-  // Check if we have a stored token
+  // If we have a stored token, trust it — no blocking verify call.
+  // If the token is expired/invalid, the first API call (bootstrapData)
+  // returns 401 which triggers auth:required → login screen.
   if (isAuthenticated()) {
-    const valid = await verifyAuth();
-    if (!valid) {
-      clearAuth();
-      showLogin();
-      return false;
-    }
     return true;
   } else {
     showLogin();

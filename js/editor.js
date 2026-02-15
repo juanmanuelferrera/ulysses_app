@@ -1,5 +1,5 @@
 // editor.js — CodeMirror 6 setup with markdown and auto-save
-import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, rectangularSelection } from 'https://esm.sh/@codemirror/view@6';
+import { EditorView, keymap, lineNumbers, drawSelection, highlightActiveLine, rectangularSelection, ViewPlugin, Decoration, WidgetType } from 'https://esm.sh/@codemirror/view@6';
 import { EditorState, Compartment } from 'https://esm.sh/@codemirror/state@6';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from 'https://esm.sh/@codemirror/commands@6';
 import { markdown, markdownLanguage } from 'https://esm.sh/@codemirror/lang-markdown@6';
@@ -79,6 +79,67 @@ const ulyssesTheme = EditorView.theme({
   },
 });
 
+// --- Checkbox widget: renders - [ ] and - [x] as clickable checkboxes ---
+class CheckboxWidget extends WidgetType {
+  constructor(checked) { super(); this.checked = checked; }
+  toDOM() {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-checkbox-wrap';
+    wrap.innerHTML = this.checked
+      ? `<svg class="cm-checkbox cm-checkbox-checked" viewBox="0 0 16 16" width="16" height="16"><rect x="1" y="1" width="14" height="14" rx="3" fill="var(--accent)" stroke="var(--accent)"/><path d="M4.5 8l2.5 2.5 4.5-5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      : `<svg class="cm-checkbox" viewBox="0 0 16 16" width="16" height="16"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5"/></svg>`;
+    return wrap;
+  }
+  eq(other) { return other.checked === this.checked; }
+  ignoreEvent() { return false; }
+}
+
+function buildCheckboxDecorations(view) {
+  const widgets = [];
+  for (let i = 1; i <= view.state.doc.lines; i++) {
+    const line = view.state.doc.line(i);
+    const match = line.text.match(/^(\s*- )(\[[ xX]\])/);
+    if (match) {
+      const start = line.from + match[1].length;
+      const end = start + match[2].length;
+      widgets.push(
+        Decoration.replace({
+          widget: new CheckboxWidget(match[2][1] !== ' '),
+        }).range(start, end)
+      );
+    }
+  }
+  return Decoration.set(widgets);
+}
+
+const checkboxPlugin = ViewPlugin.fromClass(class {
+  constructor(view) { this.decorations = buildCheckboxDecorations(view); }
+  update(update) {
+    if (update.docChanged || update.viewportChanged) {
+      this.decorations = buildCheckboxDecorations(update.view);
+    }
+  }
+}, {
+  decorations: v => v.decorations,
+  eventHandlers: {
+    mousedown: (e, view) => {
+      const wrap = e.target.closest('.cm-checkbox-wrap');
+      if (!wrap) return false;
+      const pos = view.posAtDOM(wrap);
+      const line = view.state.doc.lineAt(pos);
+      const match = line.text.match(/^(\s*- )(\[)([ xX])(\])/);
+      if (match) {
+        const charPos = line.from + match[1].length + match[2].length;
+        const newChar = match[3] === ' ' ? 'x' : ' ';
+        view.dispatch({ changes: { from: charPos, to: charPos + 1, insert: newChar } });
+        e.preventDefault();
+        return true;
+      }
+      return false;
+    },
+  },
+});
+
 const autoSave = debounce((content) => {
   if (currentSheetId) {
     bus.emit('editor:save', { id: currentSheetId, content });
@@ -113,6 +174,25 @@ export function initEditor(container) {
           document.getElementById('app')?.focus();
           return true;
         }},
+        // Enter on checkbox line: continue with new checkbox or clear empty one
+        { key: 'Enter', run: (v) => {
+          const { head } = v.state.selection.main;
+          const line = v.state.doc.lineAt(head);
+          const match = line.text.match(/^(\s*- \[[ xX]\] )(.*)/);
+          if (!match) return false;
+          const prefix = match[1].replace(/\[[xX]\]/, '[ ]');
+          if (match[2].trim() === '') {
+            // Empty checkbox line — clear it back to plain line
+            v.dispatch({ changes: { from: line.from, to: line.to, insert: '' } });
+          } else {
+            // Continue with a new unchecked checkbox
+            v.dispatch({
+              changes: { from: head, to: head, insert: '\n' + prefix },
+              selection: { anchor: head + 1 + prefix.length },
+            });
+          }
+          return true;
+        }},
         ...defaultKeymap,
         ...historyKeymap,
         ...closeBracketsKeymap,
@@ -136,6 +216,7 @@ export function initEditor(container) {
         }
       }),
       EditorView.lineWrapping,
+      checkboxPlugin,
       readOnlyComp.of(EditorState.readOnly.of(true)),
     ],
   });

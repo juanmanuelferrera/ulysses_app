@@ -34,12 +34,10 @@ export function initGoals() {
     currentGoal = await getGoal(sheet.id);
     currentStats = computeStats(sheet.content);
     bus.emit('goal:updated', currentGoal);
-    updateGoalDisplay();
   });
 
   bus.on('editor:stats', (stats) => {
     currentStats = stats;
-    if (currentGoal) updateGoalDisplay();
   });
 
   bus.on('sheet:none', () => {
@@ -47,108 +45,7 @@ export function initGoals() {
     currentGoal = null;
     currentStats = null;
     bus.emit('goal:updated', null);
-    clearGoalUI();
   });
-}
-
-function getCurrentValue() {
-  if (!currentStats || !currentGoal) return 0;
-  const t = currentGoal.targetType;
-  if (t === 'pages') return Math.ceil(currentStats.words / 250);
-  return currentStats[t] || 0;
-}
-
-function getGoalStatus() {
-  if (!currentGoal || !currentStats) return null;
-  const current = getCurrentValue();
-  const target = currentGoal.targetValue;
-  const mode = currentGoal.mode || 'about';
-  const pct = target > 0 ? current / target : 0;
-
-  let color = 'var(--success)'; // green = in progress
-  let complete = false;
-
-  if (mode === 'atLeast') {
-    complete = current >= target;
-    color = 'var(--success)'; // always green for "at least" — more is better
-  } else if (mode === 'atMost') {
-    complete = current <= target;
-    color = current > target ? 'var(--danger)' : 'var(--success)';
-  } else { // about
-    const tolerance = target * 0.1;
-    complete = Math.abs(current - target) <= tolerance;
-    if (current > target + tolerance) color = 'var(--danger)';
-    else color = 'var(--success)';
-  }
-
-  return { current, target, pct: Math.min(pct, 1), color, complete, mode };
-}
-
-function updateGoalDisplay() {
-  const statusEl = document.getElementById('goal-status');
-  const goalBtnEl = document.getElementById('goal-btn');
-  if (!statusEl) return;
-
-  if (!currentGoal) {
-    clearGoalUI();
-    return;
-  }
-
-  const status = getGoalStatus();
-  if (!status) return;
-
-  const r = 12;
-  const c = 2 * Math.PI * r;
-  const offset = c * (1 - status.pct);
-  const modeLabel = GOAL_MODES.find(m => m.value === status.mode)?.label || 'About';
-  const typeLabel = GOAL_TYPES.find(t => t.value === currentGoal.targetType)?.label || currentGoal.targetType;
-
-  let deadlineInfo = '';
-  if (currentGoal.deadline) {
-    const daysLeft = Math.ceil((new Date(currentGoal.deadline) - new Date()) / (1000 * 60 * 60 * 24));
-    const remaining = Math.max(0, currentGoal.targetValue - status.current);
-    const perDay = daysLeft > 0 ? Math.ceil(remaining / daysLeft) : remaining;
-    deadlineInfo = daysLeft > 0
-      ? `\n${daysLeft} days left · ${perDay} ${currentGoal.targetType}/day`
-      : '\nDeadline passed';
-  }
-
-  statusEl.innerHTML = '';
-
-  // Ulysses-style: ring + count display
-  const indicator = el('div', {
-    class: 'goal-indicator',
-    title: `${modeLabel} ${status.target} ${typeLabel}${deadlineInfo}`,
-    onClick: () => showGoalModal(),
-  });
-
-  const ring = el('div', { class: 'goal-ring' });
-  ring.innerHTML = `
-    <svg viewBox="0 0 32 32">
-      <circle class="track" cx="16" cy="16" r="${r}"/>
-      <circle class="progress" cx="16" cy="16" r="${r}"
-        stroke-dasharray="${c}" stroke-dashoffset="${offset}"
-        style="stroke: ${status.color}"/>
-    </svg>
-  `;
-
-  // Short type label for display
-  const shortType = { words: 'Words', chars: 'Chars', charsNoSpaces: 'Chars', sentences: 'Sentences', paragraphs: 'Paragraphs', pages: 'Pages' };
-  const countEl = el('div', { class: 'goal-count' });
-  countEl.innerHTML = `<span class="goal-current" style="color: ${status.color}">${status.current}</span> / ${status.target} ${shortType[currentGoal.targetType] || ''}`;
-
-  indicator.appendChild(ring);
-  indicator.appendChild(countEl);
-  statusEl.appendChild(indicator);
-
-  // Highlight goal button when active
-  if (goalBtnEl) goalBtnEl.classList.add('active-toggle');
-}
-
-function clearGoalUI() {
-  const statusEl = document.getElementById('goal-status');
-  if (statusEl) statusEl.innerHTML = '';
-  document.getElementById('goal-btn')?.classList.remove('active-toggle');
 }
 
 function showGoalModal() {
@@ -222,7 +119,6 @@ function showGoalModal() {
         await removeGoal(currentSheetId);
         currentGoal = null;
         bus.emit('goal:updated', null);
-        clearGoalUI();
         overlay.remove();
       }}) : null,
       el('button', { class: 'btn', text: 'Cancel', onClick: () => overlay.remove() }),
@@ -235,7 +131,6 @@ function showGoalModal() {
         await setGoal(currentSheetId, type, val, deadline, mode);
         currentGoal = { targetType: type, targetValue: val, mode, deadline };
         bus.emit('goal:updated', currentGoal);
-        updateGoalDisplay();
         overlay.remove();
       }}),
     ].filter(Boolean)),

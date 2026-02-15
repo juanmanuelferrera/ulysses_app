@@ -13,6 +13,8 @@ let currentSortBy = 'manual';
 let activeTagFilters = new Set();
 let tagFilterMode = 'or';
 let tagFilterVisible = false;
+// One-time restore: used on first group/filter select after page load, then cleared
+let pendingRestoreSheetId = localStorage.getItem('ulysses_lastSheet');
 let currentSheets = [];
 
 // --- Local sheets cache (keyed by groupId or filter) ---
@@ -346,10 +348,12 @@ export function initSheetList() {
 
     // Instant render from cache if available
     const cached = getCached(groupId, null);
+    const lastSheetId = pendingRestoreSheetId; pendingRestoreSheetId = null;
     if (cached) {
       renderSheets(cached);
       if (currentSheets.length > 0) {
-        bus.emit('sheet:select', currentSheets[0].id);
+        const restoreId = lastSheetId && currentSheets.some(s => s.id === lastSheetId) ? lastSheetId : currentSheets[0].id;
+        bus.emit('sheet:select', restoreId);
       } else {
         bus.emit('sheet:none');
       }
@@ -372,7 +376,8 @@ export function initSheetList() {
     setCache(groupId, null, sheets);
     renderSheets(sheets);
     if (currentSheets.length > 0) {
-      bus.emit('sheet:select', currentSheets[0].id);
+      const restoreId = lastSheetId && currentSheets.some(s => s.id === lastSheetId) ? lastSheetId : currentSheets[0].id;
+      bus.emit('sheet:select', restoreId);
     } else {
       bus.emit('sheet:none');
     }
@@ -394,10 +399,12 @@ export function initSheetList() {
 
     // Instant render from cache
     const cached = getCached(null, filter);
+    const lastSheetId = pendingRestoreSheetId; pendingRestoreSheetId = null;
     if (cached) {
       renderSheets(cached);
       if (currentSheets.length > 0) {
-        bus.emit('sheet:select', currentSheets[0].id);
+        const restoreId = lastSheetId && currentSheets.some(s => s.id === lastSheetId) ? lastSheetId : currentSheets[0].id;
+        bus.emit('sheet:select', restoreId);
       } else {
         bus.emit('sheet:none');
       }
@@ -418,7 +425,8 @@ export function initSheetList() {
     setCache(null, filter, sheets);
     renderSheets(sheets);
     if (sheets.length > 0) {
-      bus.emit('sheet:select', sheets[0].id);
+      const restoreId = lastSheetId && sheets.some(s => s.id === lastSheetId) ? lastSheetId : sheets[0].id;
+      bus.emit('sheet:select', restoreId);
     } else {
       bus.emit('sheet:none');
     }

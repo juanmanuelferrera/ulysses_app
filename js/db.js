@@ -264,3 +264,8 @@ export async function bootstrapData(deepSheetId = null) {
   const params = deepSheetId ? `?sheet=${deepSheetId}` : '';
   return api(`/bootstrap${params}`);
 }
+
+// --- Poll: lightweight change detection ---
+export async function poll() {
+  return api('/poll');
+}

@@ -750,6 +750,21 @@ html, body {
   background: var(--accent-light);
 }
 
+/* Checkbox widgets in editor */
+.cm-checkbox-wrap {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  cursor: pointer;
+  margin: 0 2px 0 0;
+}
+.cm-checkbox-wrap svg {
+  display: block;
+}
+.cm-checkbox-wrap:hover svg rect {
+  stroke: var(--accent);
+}
+
 .editor-container .cm-editor .cm-selectionBackground {
   background: rgba(0, 113, 227, 0.2) !important;
 }
@@ -1103,58 +1118,6 @@ select.input {
 }
 
 /* === Goals === */
-.goal-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.goal-ring {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-}
-
-.goal-ring svg {
-  width: 100%;
-  height: 100%;
-  transform: rotate(-90deg);
-}
-
-.goal-ring .track {
-  fill: none;
-  stroke: var(--border);
-  stroke-width: 2.5;
-}
-
-.goal-ring .progress {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 0.5s ease;
-}
-
-.goal-count {
-  font-size: 12px;
-  font-weight: 500;
-  font-family: var(--font-sans);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.goal-count .goal-current {
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.goal-complete .progress {
-  stroke: var(--success);
-}
-
 /* === Keywords / Tags Sidebar === */
 .tags-section {
   padding: 8px 16px;
@@ -1781,9 +1744,38 @@ select.input {
   user-select: none;
 }
 
+.stats-float-trigger {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+}
+
+.stats-badge-ring {
+  position: absolute;
+  inset: 0;
+  width: 40px;
+  height: 40px;
+  transform: rotate(-90deg);
+}
+
+.stats-badge-track {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 2;
+}
+
+.stats-badge-progress {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
+}
+
 .stats-float-badge {
-  width: 36px;
-  height: 36px;
+  position: absolute;
+  inset: 3px;
   border-radius: 50%;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -1792,29 +1784,33 @@ select.input {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   transition: all 0.3s ease;
-  border: 2.5px solid var(--border);
   font-family: var(--font-sans);
   line-height: 1;
 }
 
-.stats-float-badge:hover {
+.stats-float-trigger:hover .stats-float-badge {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--text-tertiary);
 }
 
 .stats-float.open .stats-float-badge {
   background: var(--accent);
   color: #fff;
-  border-color: var(--accent);
+}
+
+.stats-float.open .stats-badge-track {
+  stroke: transparent;
+}
+
+.stats-float.open .stats-badge-progress {
+  stroke: transparent;
 }
 
 .stats-float-popover {
   display: none;
   position: absolute;
-  top: 44px;
+  top: 48px;
   right: -8px;
   background: var(--bg-primary);
   border: 1px solid var(--border);

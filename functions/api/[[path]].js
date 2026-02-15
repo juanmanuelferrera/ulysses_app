@@ -171,6 +171,17 @@ export async function onRequest(context) {
       return json({ ok: false }, 401);
     }
 
+    // --- Poll: lightweight check for changes ---
+    if (path === 'poll' && method === 'GET') {
+      const { results } = await DB.prepare(
+        `SELECT MAX(s.updatedAt) as lastModified, COUNT(*) as total
+         FROM sheets s JOIN groups g ON s.groupId = g.id
+         WHERE s.isTrashed = 0 AND g.userId = ?`
+      ).bind(userId).all();
+      const r = results[0] || {};
+      return json({ lastModified: r.lastModified || 0, total: r.total || 0 });
+    }
+
     // --- Bootstrap: single call returns groups + counts + first sheets + tags ---
     if (path === 'bootstrap' && method === 'GET') {
       const url = new URL(request.url);
