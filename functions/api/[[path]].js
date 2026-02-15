@@ -250,6 +250,7 @@ export async function onRequest(context) {
       } else if (groupId) {
         let orderBy = 'sortOrder ASC';
         if (sort === 'date') orderBy = 'updatedAt DESC';
+        if (sort === 'created') orderBy = 'createdAt DESC';
         if (sort === 'title') orderBy = 'title ASC';
         const { results: gO } = await DB.prepare('SELECT id FROM groups WHERE id = ? AND userId = ?').bind(groupId, userId).all();
         if (!gO.length) return json([]);

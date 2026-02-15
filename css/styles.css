@@ -449,7 +449,7 @@ html, body {
   align-items: center;
   gap: 8px;
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .sheet-card-tags {

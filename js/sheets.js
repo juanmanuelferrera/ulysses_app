@@ -275,7 +275,7 @@ export function initSheetList() {
 
   // Reset sort when selecting a group
   bus.on('group:select', async (groupId) => {
-    if (currentSortBy === 'group' || currentSortBy === 'created') {
+    if (currentSortBy === 'group') {
       currentSortBy = 'manual';
     }
     activeTagFilters.clear();
@@ -554,6 +554,7 @@ function showSortMenu(x, y) {
     : [
         { label: 'Manual', value: 'manual' },
         { label: 'Date Modified', value: 'date' },
+        { label: 'Date Created', value: 'created' },
         { label: 'Title', value: 'title' },
       ];
   const menu = el('div', { class: 'context-menu fade-in' },
