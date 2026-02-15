@@ -218,6 +218,31 @@ export function initSheetList() {
     }
   });
 
+  bus.on('sheet:attachments-changed', async (sheetId) => {
+    const card = listEl.querySelector(`[data-id="${sheetId}"]`);
+    if (!card) return;
+    const { getSheet } = await import('./db.js');
+    const sheet = await getSheet(sheetId);
+    if (!sheet) return;
+    const hasNotes = sheet.notes && sheet.notes.trim().length > 0;
+    const hasAttachments = sheet.images && sheet.images !== '[]';
+    const oldIndicator = card.querySelector('.sheet-card-indicator');
+    if (hasNotes || hasAttachments) {
+      if (!oldIndicator) {
+        const header = card.querySelector('.sheet-card-header');
+        header.appendChild(el('span', {
+          class: 'sheet-card-indicator',
+          title: hasNotes && hasAttachments ? 'Notes & Attachments' : hasNotes ? 'Has Notes' : 'Has Attachments',
+          html: '&#128206;',
+        }));
+      } else {
+        oldIndicator.title = hasNotes && hasAttachments ? 'Notes & Attachments' : hasNotes ? 'Has Notes' : 'Has Attachments';
+      }
+    } else if (oldIndicator) {
+      oldIndicator.remove();
+    }
+  });
+
   bus.on('sheet:tags-changed', async (sheetId) => {
     const card = listEl.querySelector(`[data-id="${sheetId}"]`);
     if (card) {
@@ -431,8 +456,32 @@ export function renderSheets(sheets) {
       }
     }
   } else {
-    for (const sheet of filtered) {
-      listEl.appendChild(createSheetCard(sheet, isFilterView));
+    // Check if sheets come from multiple groups (parent + subgroups)
+    const uniqueGroups = new Set(filtered.map(s => s.groupId));
+    if (!isFilterView && uniqueGroups.size > 1) {
+      // Group by subgroup with separators
+      const groups = new Map();
+      for (const sheet of filtered) {
+        const key = sheet.groupId;
+        if (!groups.has(key)) {
+          groups.set(key, { name: sheet.groupName || 'Untitled', sheets: [] });
+        }
+        groups.get(key).sheets.push(sheet);
+      }
+      for (const [, group] of groups) {
+        const separator = el('div', { class: 'sheet-group-separator' }, [
+          el('span', { class: 'sheet-group-separator-name', text: group.name }),
+          el('span', { class: 'sheet-group-separator-count', text: String(group.sheets.length) }),
+        ]);
+        listEl.appendChild(separator);
+        for (const sheet of group.sheets) {
+          listEl.appendChild(createSheetCard(sheet, false));
+        }
+      }
+    } else {
+      for (const sheet of filtered) {
+        listEl.appendChild(createSheetCard(sheet, isFilterView));
+      }
     }
   }
 
@@ -441,6 +490,9 @@ export function renderSheets(sheets) {
 
 function createSheetCard(sheet, showGroupName) {
   const tags = sheet.tags || [];
+  const hasNotes = sheet.notes && sheet.notes.trim().length > 0;
+  const hasAttachments = sheet.images && sheet.images !== '[]' && sheet.images !== '[]';
+  
   const card = el('div', {
     class: 'sheet-card',
     dataset: { id: sheet.id },
@@ -449,6 +501,7 @@ function createSheetCard(sheet, showGroupName) {
     el('div', { class: 'sheet-card-header' }, [
       el('div', { class: 'sheet-card-title', text: sheet.title || 'Untitled' }),
       sheet.favorite ? el('span', { class: 'sheet-card-fav', html: '&#9733;' }) : null,
+      hasNotes || hasAttachments ? el('span', { class: 'sheet-card-indicator', title: hasNotes && hasAttachments ? 'Notes & Attachments' : hasNotes ? 'Has Notes' : 'Has Attachments', html: '&#128206;' }) : null,
     ].filter(Boolean)),
     el('div', { class: 'sheet-card-preview', text: truncate(sheet.content) }),
     el('div', { class: 'sheet-card-meta' }, [

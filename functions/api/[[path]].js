@@ -253,8 +253,11 @@ export async function onRequest(context) {
         if (sort === 'title') orderBy = 'title ASC';
         const { results: gO } = await DB.prepare('SELECT id FROM groups WHERE id = ? AND userId = ?').bind(groupId, userId).all();
         if (!gO.length) return json([]);
-        const r = await DB.prepare(`SELECT * FROM sheets WHERE groupId = ? AND isTrashed = 0 ORDER BY ${orderBy}`)
-          .bind(groupId).all();
+        // Collect this group + all descendant group IDs
+        const allGroupIds = await getDescendantGroupIds(groupId, DB);
+        const ph = allGroupIds.map(() => '?').join(',');
+        const r = await DB.prepare(`SELECT sheets.*, groups.name AS groupName FROM sheets LEFT JOIN groups ON sheets.groupId = groups.id WHERE sheets.groupId IN (${ph}) AND sheets.isTrashed = 0 ORDER BY sheets.${orderBy}`)
+          .bind(...allGroupIds).all();
         results = r.results;
       } else {
         results = [];
@@ -598,6 +601,17 @@ export async function onRequest(context) {
   }
 }
 
+// Get group + all descendant group IDs recursively
+async function getDescendantGroupIds(groupId, DB) {
+  const ids = [groupId];
+  const { results: children } = await DB.prepare('SELECT id FROM groups WHERE parentId = ?').bind(groupId).all();
+  for (const child of children) {
+    const childIds = await getDescendantGroupIds(child.id, DB);
+    ids.push(...childIds);
+  }
+  return ids;
+}
+
 // Recursive group delete
 async function deleteGroupRecursive(id, DB) {
   // Delete sheets in this group
@@ -625,24 +639,24 @@ async function getFilteredSheets(filter, DB, userId) {
 
   if (filter.startsWith('tag:')) {
     const tagId = filter.slice(4);
-    const results = (await DB.prepare(
-      joinSelect + ' INNER JOIN sheet_tags st ON sheets.id = st.sheetId WHERE st.tagId = ? AND sheets.isTrashed = 0 ORDER BY sheets.updatedAt DESC'
-    ).bind(tagId).all()).results;
-    return results;
+    const r = (await DB.prepare(
+      joinSelect + ' INNER JOIN sheet_tags st ON sheets.id = st.sheetId WHERE st.tagId = ? AND sheets.isTrashed = 0' + uf + ' ORDER BY sheets.updatedAt DESC'
+    ).bind(...[tagId, userId].filter(Boolean)).all()).results;
+    return r;
   }
 
   switch (filter) {
     case 'all':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...(userId?[userId]:[])).all()).results;
+      results = (await DB.prepare(joinSelect + ' WHERE sheets.isTrashed = 0' + uf + ' ORDER BY sheets.updatedAt DESC').bind(...(userId ? [userId] : [])).all()).results;
       break;
     case 'recent':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 AND sheets.createdAt > ?' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...[now-sevenDays,userId].filter(Boolean)).all()).results;
+      results = (await DB.prepare(joinSelect + ' WHERE sheets.isTrashed = 0 AND sheets.createdAt > ?' + uf + ' ORDER BY sheets.updatedAt DESC').bind(...[now - sevenDays, userId].filter(Boolean)).all()).results;
       break;
     case 'favorites':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 0 AND sheets.favorite = 1' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...(userId?[userId]:[])).all()).results;
+      results = (await DB.prepare(joinSelect + ' WHERE sheets.isTrashed = 0 AND sheets.favorite = 1' + uf + ' ORDER BY sheets.updatedAt DESC').bind(...(userId ? [userId] : [])).all()).results;
       break;
     case 'trash':
-      results = (await DB.prepare(`${joinSelect} WHERE sheets.isTrashed = 1' + uf + ' ORDER BY sheets.updatedAt DESC`).bind(...(userId?[userId]:[])).all()).results;
+      results = (await DB.prepare(joinSelect + ' WHERE sheets.isTrashed = 1' + uf + ' ORDER BY sheets.updatedAt DESC').bind(...(userId ? [userId] : [])).all()).results;
       break;
     default:
       results = [];

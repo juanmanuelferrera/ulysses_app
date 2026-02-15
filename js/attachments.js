@@ -45,6 +45,7 @@ export function initAttachments() {
     saveTimer = setTimeout(async () => {
       if (currentSheetId) {
         await updateSheet(currentSheetId, { notes: notesEl.value });
+        bus.emit('sheet:attachments-changed', currentSheetId);
       }
     }, 500);
   });
@@ -110,6 +111,7 @@ async function addImage(file) {
       addedAt: Date.now(),
     });
     await updateSheet(currentSheetId, { images: JSON.stringify(images) });
+    bus.emit('sheet:attachments-changed', currentSheetId);
     await renderImages();
   };
   reader.readAsDataURL(file);
@@ -134,6 +136,7 @@ async function renderImages() {
           e.stopPropagation();
           images.splice(i, 1);
           await updateSheet(currentSheetId, { images: JSON.stringify(images) });
+          bus.emit('sheet:attachments-changed', currentSheetId);
           await renderImages();
         },
       }),

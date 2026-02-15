@@ -359,6 +359,13 @@ html, body {
   flex-shrink: 0;
 }
 
+.sheet-card-indicator {
+  font-size: 12px;
+  margin-left: 6px;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
 /* Active toggle button state */
 .btn-icon.active-toggle {
   color: var(--accent);
